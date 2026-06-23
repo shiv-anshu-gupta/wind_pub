@@ -46,12 +46,17 @@ processor, fault injector, SPSC bridge and the JS frontend are already portable.
    npm install
    ```
 
-5. **Npcap** — required at **runtime** to send raw Ethernet frames.
-   - Install the runtime from <https://npcap.com/#download>.
-   - During install, tick **"Install Npcap in WinPcap API-compatible Mode"**.
-   - You do **not** need the Npcap SDK: `wpcap.dll` is loaded dynamically, so
-     the app links without it and shows a clear "install Npcap" message if the
-     driver is missing.
+5. **Npcap** — needed both to **build** and to **run**.
+   - **Runtime** (to send/receive raw Ethernet frames): install from
+     <https://npcap.com/#download> and tick **"Install Npcap in WinPcap
+     API-compatible Mode"**. `PcapTx` loads `wpcap.dll` dynamically and shows a
+     clear "install Npcap" message if the driver is missing.
+   - **SDK** (to build): download the **Npcap SDK** zip from the same page and
+     extract it to **`C:\npcap-sdk`** (so `C:\npcap-sdk\Include\pcap\pcap.h`
+     exists). `GooseReceiver.cc` (GOOSE RX) calls the pcap API directly, so it
+     needs `<pcap/pcap.h>` at compile time and `wpcap.lib` at link time.
+     `build.rs` resolves the SDK from `NPCAP_SDK_DIR` (if set), else
+     `C:\npcap-sdk`, and links `wpcap` from its `Lib\x64`.
 
 6. **libuv** — required to build the WebSocket layer (uSockets uses libuv as its
    Windows event loop). Easiest via [vcpkg](https://github.com/microsoft/vcpkg).
@@ -70,9 +75,11 @@ processor, fault injector, SPSC bridge and the JS frontend are already portable.
      (`LIBUV_TRIPLET` defaults to `x64-windows-static-md`), else
    - `C:\vcpkg\installed\x64-windows-static-md\...`
 
-   It links `uv.lib` by default (override the name with `LIBUV_LINK`). libuv's
-   own Windows system dependencies (`psapi`, `userenv`, `ws2_32`, …) are linked
-   automatically by `build.rs`.
+   `build.rs` auto-detects the import-lib name from the lib dir — `libuv.lib`
+   (recent vcpkg) or `uv.lib` (older/shared builds) — so no manual step is
+   needed; override with `LIBUV_LINK` only if your libuv was packaged
+   differently. libuv's own Windows system dependencies (`psapi`, `userenv`,
+   `ws2_32`, …) are linked automatically by `build.rs`.
 
    > Prefer the **shared** build instead? Use `libuv:x64-windows`, set
    > `LIBUV_TRIPLET=x64-windows`, and copy `uv.dll` next to the built `.exe`
@@ -139,5 +146,41 @@ elevated terminal.
 - **Timestamp precision:** the Windows path requests Npcap's `HOST_HIPREC`
   (QPC-based) timestamps when available.
 - **The `service/` directory** (standalone headless WebSocket backend) is a
-  separate Linux/Yocto target and is **not** part of the Windows Tauri build.
-  Its sources are included only for reference.
+  *separate* target from the Tauri app — it is not built by `tauri build`. It
+  now builds and runs on Windows too; see below.
+
+---
+
+## Standalone headless backend (`service/`)
+
+The same engine the Tauri window embeds, exposed over a WebSocket with **no
+GUI** — run it on its own and point a remote frontend at it (the Linux/Yocto
+`sv_publisher_service` workflow, now on Windows). It reuses the app's real
+WebSocket server (`native/src/PubWsServer.cc`), so it speaks the exact same
+JSON protocol as the embedded backend — no second copy to drift out of date.
+
+Prerequisites are the same as the Tauri build (libuv via vcpkg, the Npcap SDK
+at `C:\npcap-sdk`, MSVC). Build with CMake from `service/`:
+
+```powershell
+cd service
+cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+```
+
+Run it (optionally pass a starting port; default 9001, scans upward for a free
+slot just like the app):
+
+```powershell
+.\build\Release\sv_publisher_service.exe 9001
+# → SV Publisher WebSocket Service v1.0 — ws://0.0.0.0:9001/ws
+```
+
+It binds **all interfaces** (`0.0.0.0`), so a frontend on another machine can
+connect to `ws://<this-host>:9001/ws`. Sending frames follows the same Npcap
+driver-access rules as the app (Administrator only if Npcap was installed with
+"Restrict driver access to Administrators only").
+
+> The old hand-written `service/ws_server.cc` targeted the removed
+> single-publisher C ABI and is intentionally **not** compiled; `main.cpp` now
+> just starts `PubWsServer` and blocks.

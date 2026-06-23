@@ -19,6 +19,7 @@ const PORT_POLL_TIMEOUT_MS = 1500;   /* total wait for the eval injection */
 const PORT_POLL_INTERVAL_MS = 25;
 
 let WS_URL = null;       /* resolved after _resolvePort() finishes */
+let _localUrl = null;    /* the embedded-backend URL, so setBackend(null) reverts */
 
 function _resolvePort() {
     return new Promise(resolve => {
@@ -143,6 +144,7 @@ function _connect() {
 (async function _bootstrap() {
     const port = await _resolvePort();
     WS_URL = `ws://localhost:${port}/ws`;
+    _localUrl = WS_URL;
     console.log('[tauriClient] WS endpoint:', WS_URL);
     _connect();
 })();
@@ -252,6 +254,37 @@ function call(cmd, payload = {}) {
 export async function connect() { /* backwards-compat no-op — auto-connects */ return _isOpen; }
 export function disconnect()   { if (_ws) _ws.close(); }
 export function isConnected()  { return _isOpen; }
+
+/* -------------------------------------------------------------------------
+ * Backend retargeting — local (embedded) vs remote (headless over network)
+ *
+ * tauriClient is the single transport the WHOLE app uses (header Start,
+ * MultiPublisher, GOOSE, faults, stats). Pointing it at a remote ws:// URL
+ * therefore makes every one of those drive the remote backend *identically*
+ * to the local one — no per-feature rewiring. The remote backend must speak
+ * the same PubWsServer protocol (mp_*, goose_*, fault_*); the headless
+ * sv_publisher_service built from PubWsServer.cc does.
+ * ------------------------------------------------------------------------- */
+
+/** Retarget the backend. `url` = a ws:// endpoint for a remote backend, or
+ *  null/undefined to revert to the embedded local backend. Closing the current
+ *  socket triggers the existing auto-reconnect against the new WS_URL. */
+export function setBackend(url) {
+    const target = url || _localUrl;
+    if (!target) { console.warn('[tauriClient] setBackend() before bootstrap finished'); return false; }
+    if (target === WS_URL) { if (_isOpen) _emit('connect', { url: WS_URL }); return true; }
+    console.log('[tauriClient] retargeting backend ->', target);
+    WS_URL = target;
+    if (_ws) { try { _ws.close(); } catch (_) { /* onclose reconnects */ } }
+    else _connect();
+    return true;
+}
+
+/** Current endpoint + whether it is a remote (non-embedded) backend. */
+export function getBackend() {
+    return { url: WS_URL, isRemote: !!(_localUrl && WS_URL && WS_URL !== _localUrl) };
+}
+export function isRemote() { return getBackend().isRemote; }
 export function on(event, handler) {
     if (!_listeners[event]) _listeners[event] = [];
     _listeners[event].push(handler);

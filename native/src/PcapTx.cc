@@ -39,8 +39,40 @@
 #include <windows.h>
 #include <winsock2.h>
 #include <iphlpapi.h>
+#include <delayimp.h>
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
+
+/*============================================================================
+ * Delay-load hook for wpcap.dll
+ *
+ * GooseReceiver.cc links wpcap.lib directly (it calls the pcap API), which
+ * would otherwise make wpcap.dll a *load-time* dependency — and the EXE would
+ * fail to even start (STATUS_DLL_NOT_FOUND, 0xC0000135). Npcap installs
+ * wpcap.dll under %SystemRoot%\System32\Npcap, a directory that is NOT on the
+ * default DLL search path. We therefore delay-load wpcap.dll
+ * (/DELAYLOAD:wpcap.dll in build.rs); on the first pcap call this hook loads it
+ * from the real Npcap location, mirroring load_npcap_dll() below. If the
+ * explicit path misses, returning null lets the loader fall back to the default
+ * search (so a WinPcap-style global install still resolves).
+ *============================================================================*/
+static FARPROC WINAPI wpcap_delay_hook(unsigned dliNotify, PDelayLoadInfo pdli) {
+    if (dliNotify == dliNotePreLoadLibrary && pdli && pdli->szDll &&
+        _stricmp(pdli->szDll, "wpcap.dll") == 0) {
+        char path[MAX_PATH];
+        if (GetSystemDirectoryA(path, MAX_PATH)) {
+            strncat(path, "\\Npcap\\wpcap.dll", sizeof(path) - strlen(path) - 1);
+            /* ALTERED_SEARCH_PATH so wpcap.dll's Packet.dll dependency resolves
+             * from System32\Npcap (see load_npcap_dll for the full rationale). */
+            HMODULE h = LoadLibraryExA(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+            if (h) return reinterpret_cast<FARPROC>(h);
+        }
+    }
+    return nullptr;
+}
+
+/* delayimp.h declares this weak hook pointer; defining it installs our hook. */
+const PfnDliHook __pfnDliNotifyHook2 = wpcap_delay_hook;
 
 /*============================================================================
  * Minimal pcap type/ABI declarations (so we need no Npcap SDK headers)
@@ -114,7 +146,12 @@ static int load_npcap_dll(void) {
     char path[MAX_PATH];
     if (GetSystemDirectoryA(path, MAX_PATH)) {
         strncat(path, "\\Npcap\\wpcap.dll", sizeof(path) - strlen(path) - 1);
-        g_dll = LoadLibraryA(path);
+        /* LOAD_WITH_ALTERED_SEARCH_PATH so wpcap.dll's own dependency,
+         * Packet.dll (also under System32\Npcap, NOT on the default search
+         * path), resolves from that same directory. A plain LoadLibrary of the
+         * full path fails with ERROR_MOD_NOT_FOUND (126) because the dependency
+         * search would otherwise skip the Npcap dir. */
+        g_dll = LoadLibraryExA(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     }
     if (!g_dll) g_dll = LoadLibraryA("wpcap.dll");
 

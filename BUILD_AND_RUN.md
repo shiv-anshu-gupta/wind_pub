@@ -41,6 +41,11 @@ Close and reopen PowerShell after `setx` so `VCPKG_ROOT` is picked up.
 Install from <https://npcap.com/#download>. **During install, tick
 "Install Npcap in WinPcap API-compatible Mode."** (Reboot if it asks.)
 
+### 1f. Npcap SDK (build — needed to compile the GOOSE receiver)
+From the same page, download the **Npcap SDK** zip and extract it to
+**`C:\npcap-sdk`** (so `C:\npcap-sdk\Include\pcap\pcap.h` exists). `build.rs`
+finds it there automatically (or set `NPCAP_SDK_DIR` to a custom location).
+
 ---
 
 ## 2. Build
@@ -105,6 +110,8 @@ publishing.
 | Problem | Fix |
 |---------|-----|
 | `cannot open input file 'uv.lib'` | libuv not installed/found → redo step 1d; make sure `VCPKG_ROOT` is set (reopen terminal). |
+| `Cannot open include file: 'pcap/pcap.h'` | Npcap SDK missing → do step 1f (extract the SDK to `C:\npcap-sdk`) or set `NPCAP_SDK_DIR`. |
+| `cannot open input file 'wpcap.lib'` | Npcap SDK present but no `Lib\x64` → re-extract the full SDK zip to `C:\npcap-sdk`. |
 | `LNK4098 … LIBCMT conflicts` | Wrong libuv triplet → use `x64-windows-static-md` (not `x64-windows-static`). |
 | `Npcap not found` at runtime | Install Npcap (step 1e) with WinPcap-compatible mode; reboot. |
 | Adapter dropdown empty | Re-run the Npcap installer with "WinPcap API-compatible Mode" ticked. |

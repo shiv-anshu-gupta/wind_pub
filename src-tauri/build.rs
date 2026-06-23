@@ -167,7 +167,10 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         build
-            .flag("/std:c++17")
+            // C++20: PubWsServer.cc uses designated initializers for the uWS
+            // behavior struct. GCC/Clang accept these in C++17 as an extension;
+            // MSVC rejects them below C++20 (error C7555).
+            .flag("/std:c++20")
             .flag("/EHsc")
             .flag("/MD")            // Use dynamic MSVC runtime
             .define("WIN32", None)
@@ -178,21 +181,40 @@ fn main() {
             .define("_CRT_SECURE_NO_WARNINGS", None)
             .define("_WINSOCK_DEPRECATED_NO_WARNINGS", None);
 
+        // Npcap SDK headers. PcapTx loads wpcap.dll dynamically, but GooseReceiver
+        // (GOOSE RX) calls the pcap API directly and so needs <pcap/pcap.h> at
+        // compile time and wpcap.lib at link time.
+        build.include(npcap_sdk_include_dir());
+
         // libuv (event loop for uSockets). Provide its lib dir, then link it.
         if let Some(lib_dir) = libuv_lib_dir() {
             println!("cargo:rustc-link-search=native={}", lib_dir.display());
         }
-        // vcpkg names the lib `uv.lib` for both the static-md and shared builds.
-        // Override via LIBUV_LINK only if your libuv was packaged differently.
-        let uv_lib = std::env::var("LIBUV_LINK").unwrap_or_else(|_| "uv".to_string());
+        // The link name follows the file vcpkg emitted: recent vcpkg names the
+        // static-md import lib `libuv.lib` (→ link "libuv"); older/shared builds
+        // use `uv.lib` (→ link "uv"). Auto-detect from the lib dir, overridable
+        // via LIBUV_LINK if your libuv was packaged differently.
+        let uv_lib = std::env::var("LIBUV_LINK").unwrap_or_else(|_| libuv_link_name());
         println!("cargo:rustc-link-lib={}", uv_lib);
+
+        // Npcap import library (wpcap.lib) for the GOOSE RX pcap calls above.
+        if let Some(lib_dir) = npcap_sdk_lib_dir() {
+            println!("cargo:rustc-link-search=native={}", lib_dir.display());
+        }
+        println!("cargo:rustc-link-lib=wpcap");
+        // Delay-load wpcap.dll: without this it would be a load-time dependency
+        // and the EXE would fail to start, because Npcap installs wpcap.dll under
+        // System32\Npcap (not on the default DLL search path). A delay-load hook
+        // in PcapTx.cc loads it from there on first use. delayimp provides the
+        // delay-load runtime (__delayLoadHelper2).
+        println!("cargo:rustc-link-arg=/DELAYLOAD:wpcap.dll");
+        println!("cargo:rustc-link-lib=delayimp");
 
         // Winsock + adapter enumeration (PcapTx/PubWsServer) and libuv's own
         // Windows system dependencies.
         for lib in ["ws2_32", "iphlpapi", "psapi", "userenv", "user32", "advapi32", "dbghelp"] {
             println!("cargo:rustc-link-lib={}", lib);
         }
-        // Npcap (wpcap.dll) is loaded dynamically at runtime — no link needed.
     }
 
     #[cfg(target_os = "linux")]
@@ -262,5 +284,55 @@ fn libuv_include_dir() -> std::path::PathBuf {
 #[cfg(target_os = "windows")]
 fn libuv_lib_dir() -> Option<std::path::PathBuf> {
     let dir = libuv_root().join("lib");
+    if dir.exists() { Some(dir) } else { None }
+}
+
+// Pick the libuv link name from whichever import lib vcpkg actually produced:
+// recent vcpkg emits `libuv.lib` (→ "libuv"), older/shared builds emit `uv.lib`
+// (→ "uv"). Falls back to "uv" if neither is found (lets the linker surface a
+// clear "cannot open input file 'uv.lib'" pointing at a missing libuv install).
+#[cfg(target_os = "windows")]
+fn libuv_link_name() -> String {
+    if let Some(lib_dir) = libuv_lib_dir() {
+        if lib_dir.join("libuv.lib").exists() {
+            return "libuv".to_string();
+        }
+        if lib_dir.join("uv.lib").exists() {
+            return "uv".to_string();
+        }
+    }
+    "uv".to_string()
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Npcap SDK discovery (Windows only)
+//
+// GooseReceiver.cc uses the pcap API directly, so it needs the SDK's headers
+// (<pcap/pcap.h>) and wpcap.lib. Resolved from, in order:
+//   1. NPCAP_SDK_DIR — root of an extracted Npcap SDK (has Include/ and Lib/)
+//   2. C:\npcap-sdk  — the conventional default location
+//
+// Download + extract the SDK from https://npcap.com/#download (the SDK zip, not
+// the runtime installer). The wpcap.dll runtime is still loaded at run time and
+// must be installed separately to send/receive frames.
+// ════════════════════════════════════════════════════════════════════════════
+#[cfg(target_os = "windows")]
+fn npcap_sdk_root() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    if let Ok(dir) = std::env::var("NPCAP_SDK_DIR") {
+        return PathBuf::from(dir);
+    }
+    PathBuf::from("C:\\npcap-sdk")
+}
+
+#[cfg(target_os = "windows")]
+fn npcap_sdk_include_dir() -> std::path::PathBuf {
+    npcap_sdk_root().join("Include")
+}
+
+// The SDK ships 32- and 64-bit import libs; this Windows target is x64.
+#[cfg(target_os = "windows")]
+fn npcap_sdk_lib_dir() -> Option<std::path::PathBuf> {
+    let dir = npcap_sdk_root().join("Lib").join("x64");
     if dir.exists() { Some(dir) } else { None }
 }
