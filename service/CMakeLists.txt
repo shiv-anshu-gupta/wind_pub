@@ -178,4 +178,10 @@ else()
     target_compile_definitions(sv_publisher_service PRIVATE LIBUS_NO_SSL LIBUS_USE_EPOLL)
     target_compile_options(sv_publisher_service PRIVATE -O2)
     target_link_libraries(sv_publisher_service PRIVATE sv_engine usockets ZLIB::ZLIB pthread)
+    # Link libstdc++/libgcc statically so the binary runs on a target with an
+    # older C++ runtime (e.g. the Yocto device, GLIBCXX_3.4.32) regardless of
+    # this build host's newer libstdc++. libpcap/libz stay dynamic — the target
+    # provides them. (glibc itself is still dynamic; build on glibc <= target,
+    # or check `objdump -T <bin> | grep GLIBC_` <= the target's glibc.)
+    target_link_options(sv_publisher_service PRIVATE -static-libstdc++ -static-libgcc)
 endif()
