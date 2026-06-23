@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SV Publisher - IEC 61850 Sampled Values</title>
+    <link rel="stylesheet" href="style.css">
+
+    <!-- Tailwind CSS v4 — PRECOMPILED to a static stylesheet at build time.
+         Replaces the in-browser JIT (vendor/tailwind.browser.js), which ran a
+         MutationObserver and recompiled CSS on every DOM mutation, pegging the
+         WebKit process at ~50% CPU as the stats timers updated the DOM.
+         Regenerate after adding utility classes:
+           npx @tailwindcss/cli@4.3.0 -i web/tailwind.src.css -o web/tailwind.css --minify -->
+    <link rel="stylesheet" href="tailwind.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1>SV Publisher</h1>
+                <span class="version">v1.0 MVP</span>
+            </div>
+            <div class="header-center">
+                <div class="status-indicator" id="appStatus" data-state="idle">
+                    <span class="status-dot"></span>
+                    <span class="status-label">Idle</span>
+                </div>
+                <button class="btn btn-success btn-lg" id="globalStartBtn"><i data-lucide="play"></i> START</button>
+                <button class="btn btn-danger btn-lg" id="globalStopBtn" disabled><i data-lucide="square"></i> STOP</button>
+                <button class="btn btn-warning btn-lg" id="globalResetBtn" title="Reset the entire application to its initial state (all panels, channels, equations, publishers, fault injection)"><i data-lucide="rotate-ccw"></i> RESET</button>
+
+                <!-- Opens the per-stream Communication Headers config page (SV + GOOSE) -->
+                <button class="btn btn-info btn-lg" id="globalConfigBtn" title="Configure communication headers per stream (SV/GOOSE)">
+                    <i data-lucide="settings-2"></i> CONFIGURE STREAMS
+                </button>
+
+                <!-- Visual divider between publish controls and layout picker -->
+                <div class="header-divider" aria-hidden="true"></div>
+
+                <!-- Layout Mode Picker -->
+                <div class="layout-picker" id="layoutPicker" role="group" aria-label="Layout columns">
+                    <button class="layout-btn" data-layout-mode="2" type="button" title="2-column layout">
+                        <span class="layout-icon" aria-hidden="true"><span></span><span></span></span>
+                        <span class="layout-label">2</span>
+                    </button>
+                    <button class="layout-btn active" data-layout-mode="3" type="button" title="3-column layout">
+                        <span class="layout-icon" aria-hidden="true"><span></span><span></span><span></span></span>
+                        <span class="layout-label">3</span>
+                    </button>
+                </div>
+            </div>
+            <button
+                class="btn btn-outline btn-icon btn-sm"
+                id="themeToggleBtn"
+                type="button"
+                title="Toggle Light/Dark Theme"
+            >
+                <span id="themeIcon"><i data-lucide="moon"></i></span>
+            </button>
+            <button
+                class="btn btn-outline btn-icon btn-sm"
+                id="toggleFrameStructure"
+                type="button"
+                title="Toggle Frame Structure panel"
+                aria-label="Toggle Frame Structure"
+            >
+                <i data-lucide="panel-right"></i>
+            </button>
+            <div class="header-right">
+                <button class="btn btn-outline btn-sm" id="loadConfigBtn" title="Load previously saved configuration">
+                    <i data-lucide="folder-open"></i> Load Config
+                </button>
+                <button class="btn btn-outline btn-sm" id="saveConfigBtn" title="Save current configuration to file">
+                    <i data-lucide="save"></i> Save Config
+                </button>
+                <button class="btn btn-outline btn-sm" id="exportCidBtn" title="Export CID file for subscriber auto-configuration (IEC 61850 SCL format)">
+                    <i data-lucide="upload"></i> Export CID
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content - Three Column Layout (Resizable) -->
+        <main class="main-content three-column-layout" id="mainContent">
+            <!-- Left Column - Configuration & Data Source -->
+            <div class="left-column" id="leftColumn">
+                <div class="column-toolbar" data-column-id="leftColumn">
+                    <button class="column-maximize-btn"
+                            data-maximize-target="leftColumn"
+                            type="button"
+                            title="Maximize column"
+                            aria-label="Maximize Configuration column">⛶</button>
+                    <button class="column-popout-btn"
+                            data-popout-target="leftColumn"
+                            type="button"
+                            title="Pop out to floating window"
+                            aria-label="Pop out Configuration column">⧉</button>
+                </div>
+                <!-- Remote Backend (WebSocket) — configure the headless Yocto backend -->
+                <div id="remote-backend-container"></div>
+
+                <!-- Data Source with PCAP/Equation tabs (injected by DataSource module) -->
+                <div id="data-source-container"></div>
+
+                <!-- Available Channels Display -->
+                <div id="channels-display-container"></div>
+
+                <!-- Standard Selection (injected by StandardSelector module) -->
+                <div id="standard-selector-container"></div>
+
+                <!-- Stream Settings - Publishing & Timing Parameters -->
+                <!-- (Interface, Frequency, Samples/Cycle, Sample Rate) -->
+                <div id="stream-settings-container"></div>
+            </div>
+
+            <!-- Resize Handle: Left ↔ Middle -->
+            <div class="resize-handle" id="resizeHandleLeft" title="Drag to resize"></div>
+
+            <!-- Middle Column - Frame Structure -->
+            <div class="middle-column" id="middleColumn">
+                <div class="column-toolbar" data-column-id="middleColumn">
+                    <button class="column-maximize-btn"
+                            data-maximize-target="middleColumn"
+                            type="button"
+                            title="Maximize column"
+                            aria-label="Maximize Frame Structure column">⛶</button>
+                    <button class="column-popout-btn"
+                            data-popout-target="middleColumn"
+                            type="button"
+                            title="Pop out to floating window"
+                            aria-label="Pop out Frame Structure column">⧉</button>
+                </div>
+                <!-- Frame Structure Viewer relocated to right-edge sidebar (see #frameSidebar) -->
+            </div>
+
+            <!-- Resize Handle: Middle ↔ Right -->
+            <div class="resize-handle" id="resizeHandleRight" title="Drag to resize"></div>
+
+            <!-- Right Column - Publish & Monitoring -->
+            <div class="right-column" id="rightColumn">
+                <div class="column-toolbar" data-column-id="rightColumn">
+                    <button class="column-maximize-btn"
+                            data-maximize-target="rightColumn"
+                            type="button"
+                            title="Maximize column"
+                            aria-label="Maximize Control and Monitoring column">⛶</button>
+                    <button class="column-popout-btn"
+                            data-popout-target="rightColumn"
+                            type="button"
+                            title="Pop out to floating window"
+                            aria-label="Pop out Control and Monitoring column">⧉</button>
+                </div>
+                <!-- Publish Mode Toggle (Single Stream / Multi Stream) -->
+                <div id="publish-mode-container"></div>
+
+                <!-- Statistics (Real-time stats - always visible) -->
+                <div id="statistics-container"></div>
+
+                <!-- Fault Injection relocated to right-edge slide-in sidebar (see #faultSidebar) -->
+
+                <!-- Collapsibles: Wireshark + Preview (secondary info) -->
+                <details class="right-col-details">
+                    <summary><i data-lucide="activity"></i> Wireshark Helper</summary>
+                    <div id="wireshark-container"></div>
+                </details>
+                <details class="right-col-details">
+                    <summary><i data-lucide="package"></i> Packet Preview</summary>
+                    <div id="preview-container"></div>
+                </details>
+            </div>
+        </main>
+
+        <!-- Slide-in sidebar housing the Frame Structure viewer -->
+        <aside id="frameSidebar" class="right-sidebar hidden" data-allow-context-menu="true">
+            <header class="right-sidebar__header">
+                <h3>Frame Structure</h3>
+                <button class="right-sidebar__close" data-close="frameSidebar" type="button" aria-label="Close"><i data-lucide="x"></i></button>
+            </header>
+            <div class="right-sidebar__body">
+                <div id="frame-viewer-container"></div>
+            </div>
+        </aside>
+
+        <!-- Slide-in sidebar housing the Fault Injection panel. z-[95] = overlay
+             variant, sits above the push-layout frameSidebar. -->
+        <aside id="faultSidebar" class="right-sidebar fixed right-0 w-[560px] max-w-[90vw] bg-[var(--bg-secondary,#1e293b)] text-[var(--text-primary,#f1f5f9)] border-l border-[var(--border-color,#334155)] shadow-[-8px_0_24px_rgba(0,0,0,0.35)] flex flex-col translate-x-0 transition-transform duration-300 ease-out z-[95] [&.hidden]:translate-x-full [&.hidden]:pointer-events-none hidden" data-allow-context-menu="true">
+            <header class="flex items-center justify-between px-5 py-3.5 border-b border-[var(--border-color,#334155)] shrink-0 [&_h3]:m-0 [&_h3]:text-[0.95rem] [&_h3]:font-semibold [&_h3]:tracking-[0.3px]">
+                <h3>Fault Injection</h3>
+                <button class="bg-transparent border-0 text-inherit text-lg cursor-pointer w-[30px] h-[30px] rounded-md inline-flex items-center justify-center font-[inherit] hover:bg-white/10" data-close="faultSidebar" type="button" aria-label="Close"><i data-lucide="x"></i></button>
+            </header>
+            <div class="flex-1 overflow-y-auto px-5 py-4">
+                <div id="fault-injection-container"></div>
+            </div>
+        </aside>
+
+        <!-- Vertical side-tab buttons: pinned to right edge, vertical text via
+             rotated span (avoids WebKitGTK writing-mode inconsistencies).
+             aria-expanded="true" hides the tab while its sidebar is open. -->
+        <button class="fixed -right-[3px] top-[calc(50%-80px)] -translate-y-1/2 z-[92] w-9 min-h-[140px] py-4 box-border flex items-center justify-center overflow-hidden bg-[var(--bg-secondary,#1e293b)] text-[var(--text-primary,#f1f5f9)] border border-[var(--border-color,#334155)] border-l-4 border-l-[#a855f7] rounded-r-[4px] cursor-pointer transition-[right,background,opacity] duration-200 hover:right-0 hover:bg-[var(--bg-tertiary,#334155)] focus-visible:right-0 focus-visible:bg-[var(--bg-tertiary,#334155)] focus-visible:outline-none aria-expanded:pointer-events-none aria-expanded:opacity-0 aria-expanded:translate-x-5" id="frameSidebarTab" type="button" aria-controls="frameSidebar" aria-expanded="false" title="Toggle Frame Structure panel">
+            <span class="inline-block whitespace-nowrap font-[inherit] text-[11px] font-semibold leading-none tracking-[1.5px] uppercase -rotate-90 origin-center">Frame Structure</span>
+        </button>
+
+        <button class="fixed -right-[3px] top-[calc(50%+80px)] -translate-y-1/2 z-[92] w-9 min-h-[140px] py-4 box-border flex items-center justify-center overflow-hidden bg-[var(--bg-secondary,#1e293b)] text-[var(--text-primary,#f1f5f9)] border border-[var(--border-color,#334155)] border-l-4 border-l-[#f97316] rounded-r-[4px] cursor-pointer transition-[right,background,opacity] duration-200 hover:right-0 hover:bg-[var(--bg-tertiary,#334155)] focus-visible:right-0 focus-visible:bg-[var(--bg-tertiary,#334155)] focus-visible:outline-none aria-expanded:pointer-events-none aria-expanded:opacity-0 aria-expanded:translate-x-5" id="faultSidebarTab" type="button" aria-controls="faultSidebar" aria-expanded="false" title="Open Fault Injection panel">
+            <span class="inline-block whitespace-nowrap font-[inherit] text-[11px] font-semibold leading-none tracking-[1.5px] uppercase -rotate-90 origin-center">Fault Injection</span>
+        </button>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-left">
+                <span>SV Publisher MVP</span>
+                <span class="separator">|</span>
+                <span>IEC 61850</span>
+                <span class="separator">|</span>
+                <span>Tauri + Rust</span>
+            </div>
+            <div class="footer-right">
+                <span>Equation Editor from COMTRADE Viewer</span>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Stream Configuration Page (slide-in panel for Shivani / external use) -->
+    <div id="stream-config-page-root" class="cfg-root"></div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">
+        <span class="toast-icon" id="toastIcon"><i data-lucide="check"></i></span>
+        <span class="toast-message" id="toastMessage">Success!</span>
+    </div>
+
+    <!-- Math.js for equation evaluation -->
+    <script src="vendor/mathjs.min.js"></script>
+
+    <!-- Lucide icons (vendored locally per Task A no-CDN policy) -->
+    <script src="vendor/lucide.min.js"></script>
+
+    <!-- Main Application (ES6 Modules) -->
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

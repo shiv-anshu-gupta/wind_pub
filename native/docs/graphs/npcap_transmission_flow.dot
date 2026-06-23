@@ -1,0 +1,185 @@
+/**
+ * @file npcap_transmission_flow.dot
+ * @brief Npcap DLL Loading & Transmission Strategy Flow
+ * 
+ * Render: dot -Tpng npcap_transmission_flow.dot -o npcap_transmission_flow.png
+ */
+
+digraph NpcapTransmission {
+    rankdir=TB;
+    fontname="Segoe UI";
+    fontsize=12;
+    node [fontname="Segoe UI", fontsize=10, style="filled,rounded", shape=box];
+    edge [fontname="Segoe UI", fontsize=9];
+    label="Npcap Integration & Transmission Strategy\n";
+    labelloc=t;
+    labelfontsize=14;
+
+    // ================================================================
+    // DLL LOADING
+    // ================================================================
+    subgraph cluster_dll {
+        label="1. DLL Dynamic Loading (npcap_load_dll)";
+        style="filled,rounded"; fillcolor="#E3F2FD"; color="#1565C0";
+
+        init [label="Application Start\ninit_npcap_path()\nAdd C:\\Windows\\System32\\Npcap to PATH", fillcolor="#BBDEFB"];
+        load [label="LoadLibraryA(\"wpcap.dll\")\nfrom Npcap directory", fillcolor="#BBDEFB"];
+        
+        subgraph cluster_funcs {
+            label="GetProcAddress()";
+            style="filled,rounded"; fillcolor="#BBDEFB";
+            
+            required [label="Required Functions\n• pcap_findalldevs\n• pcap_freealldevs\n• pcap_open_live\n• pcap_close\n• pcap_sendpacket", fillcolor="#90CAF9"];
+            optional [label="Optional Functions\n• pcap_sendqueue_alloc\n• pcap_sendqueue_queue\n• pcap_sendqueue_transmit\n• pcap_sendqueue_destroy\n• pcap_create\n• pcap_set_tstamp_type\n• pcap_set_immediate_mode\n• pcap_activate", fillcolor="#90CAF9"];
+        }
+    }
+
+    // ================================================================
+    // INTERFACE OPEN
+    // ================================================================
+    subgraph cluster_open {
+        label="2. Interface Opening Strategy";
+        style="filled,rounded"; fillcolor="#E8F5E9"; color="#2E7D32";
+
+        open_start [label="npcap_open(device_name)", fillcolor="#C8E6C9"];
+        
+        pcap_create_avail [label="pcap_create\navailable?", fillcolor="#FFF9C4", shape=diamond];
+        
+        advanced_open [label="Advanced Open (Preferred)\npcap_create(device)\npcap_set_snaplen(65536)\npcap_set_promisc(1)\npcap_set_timeout(1)\npcap_set_tstamp_type(HOST_HIPREC)\npcap_set_immediate_mode(1)\npcap_activate()", fillcolor="#A5D6A7"];
+        
+        simple_open [label="Simple Open (Fallback)\npcap_open_live(\n  device, 65536, 1, 1, errbuf\n)", fillcolor="#C8E6C9"];
+
+        open_result [label="g_handle = pcap_t*\nInterface ready for transmission", fillcolor="#C8E6C9", shape=ellipse];
+    }
+
+    // ================================================================
+    // SEND MODE DECISION
+    // ================================================================
+    subgraph cluster_sendmode {
+        label="3. Send Mode Selection";
+        style="filled,rounded"; fillcolor="#F3E5F5"; color="#6A1B9A";
+
+        mode_select [label="Which send mode?", fillcolor="#E1BEE7", shape=diamond];
+        
+        auto_mode [label="AUTO (0)\nCheck if SendQueue\nis available", fillcolor="#CE93D8", shape=diamond];
+    }
+
+    // ================================================================
+    // BATCH TRANSMISSION
+    // ================================================================
+    subgraph cluster_batch {
+        label="4a. SendQueue (Batch) Mode";
+        style="filled,rounded"; fillcolor="#FFF3E0"; color="#E65100";
+
+        batch_rate [label="Aggregate rate\n≤ 4800 pps?", fillcolor="#FFE0B2", shape=diamond];
+        
+        tier1 [label="TIER 1: Low Rate\n1 packet per SendQueue\nsync = 1 (kernel pacing)\nNdisMSleep handles timing\nAccuracy: ~1ms", fillcolor="#FFCC80"];
+        
+        tier2 [label="TIER 2: High Rate\nAdaptive batch size\ntarget ~500µs wire time\nsync = 0 (blast ASAP)\nQPC spin-wait between batches\nRe-anchor every 200 batches", fillcolor="#FFCC80"];
+
+        sq_create [label="pcap_sendqueue_alloc(memsize)", fillcolor="#FFE0B2"];
+        sq_add [label="pcap_sendqueue_queue(pkt)\n× batch_size packets", fillcolor="#FFE0B2"];
+        sq_transmit [label="pcap_sendqueue_transmit(sync)", fillcolor="#FF8A65", penwidth=2];
+        sq_destroy [label="pcap_sendqueue_destroy()", fillcolor="#FFE0B2"];
+    }
+
+    // ================================================================
+    // IMMEDIATE TRANSMISSION
+    // ================================================================
+    subgraph cluster_immediate {
+        label="4b. SendPacket (Immediate) Mode";
+        style="filled,rounded"; fillcolor="#E8F5E9"; color="#2E7D32";
+
+        imm_rate [label="Packet rate?", fillcolor="#C8E6C9", shape=diamond];
+        
+        sleep_spin [label="≤ 4800 pps: SLEEP+SPIN\nsleep_for(80% of interval)\nthen spin remaining 20%\nBest: balanced CPU/accuracy", fillcolor="#A5D6A7"];
+        
+        pure_spin [label="≤ 50000 pps: PURE SPIN\n_mm_pause() tight loop\non QPC counter\nBest: sub-µs accuracy", fillcolor="#A5D6A7"];
+        
+        no_wait [label="> 50000 pps: NO PACING\nBlast as fast as NIC allows\nNIC is the bottleneck", fillcolor="#A5D6A7"];
+
+        sendpacket [label="pcap_sendpacket(frame, len)", fillcolor="#81C784", penwidth=2];
+    }
+
+    // ================================================================
+    // USB OPTIMIZED
+    // ================================================================
+    subgraph cluster_usb {
+        label="4c. USB-Optimized Mode";
+        style="filled,rounded"; fillcolor="#FCE4EC"; color="#AD1457";
+
+        usb_pad [label="Frame Padding\nnpcap_send_packet_padded()\nPad to usbPadSize bytes\n(e.g., 256-1522)\nPrevents USB bulk aggregation", fillcolor="#F8BBD0"];
+        
+        usb_gap [label="Minimum Gap\nForced SPIN pacing\nusbMinGapUs microseconds\n(default 130µs)\nRespects USB microframes", fillcolor="#F8BBD0"];
+
+        usb_send [label="pcap_sendpacket(\n  paddedFrame, paddedLen\n)", fillcolor="#F48FB1", penwidth=2];
+    }
+
+    // ================================================================
+    // OUTPUT
+    // ================================================================
+    subgraph cluster_output {
+        label="5. Network Output";
+        style="filled,rounded"; fillcolor="#FFEBEE"; color="#C62828";
+
+        ndis [label="NDIS Miniport Driver\n(kernel mode)", fillcolor="#FFCDD2"];
+        nic [label="NIC Hardware\n(PCIe or USB)", fillcolor="#FFCDD2", shape=box3d];
+        wire [label="Ethernet Wire\nIEC 61850-9-2LE\nSV Frames", fillcolor="#EF9A9A", shape=hexagon];
+    }
+
+    // ================================================================
+    // EDGES
+    // ================================================================
+
+    // DLL loading
+    init -> load;
+    load -> required;
+    load -> optional;
+
+    // Interface open
+    required -> open_start [style=dashed, label="functions loaded"];
+    open_start -> pcap_create_avail;
+    pcap_create_avail -> advanced_open [label="yes"];
+    pcap_create_avail -> simple_open [label="no"];
+    advanced_open -> open_result;
+    simple_open -> open_result;
+
+    // Mode selection
+    open_result -> mode_select [label="interface open\nready to publish"];
+    mode_select -> auto_mode [label="AUTO (0)"];
+    mode_select -> sq_create [label="SENDQUEUE (1)"];
+    mode_select -> imm_rate [label="SENDPACKET (2)"];
+    mode_select -> usb_pad [label="USB (3)"];
+
+    auto_mode -> sq_create [label="sendqueue\navailable"];
+    auto_mode -> imm_rate [label="not\navailable"];
+
+    // Batch mode
+    sq_create -> batch_rate;
+    batch_rate -> tier1 [label="≤ 4800"];
+    batch_rate -> tier2 [label="> 4800"];
+    tier1 -> sq_add;
+    tier2 -> sq_add;
+    sq_add -> sq_transmit;
+    sq_transmit -> sq_destroy;
+    sq_destroy -> sq_create [label="next batch", style=dashed];
+
+    // Immediate mode
+    imm_rate -> sleep_spin [label="≤ 4800"];
+    imm_rate -> pure_spin [label="≤ 50000"];
+    imm_rate -> no_wait [label="> 50000"];
+    sleep_spin -> sendpacket;
+    pure_spin -> sendpacket;
+    no_wait -> sendpacket;
+
+    // USB mode
+    usb_pad -> usb_gap;
+    usb_gap -> usb_send;
+
+    // All to network
+    sq_transmit -> ndis [color="#C62828", penwidth=2];
+    sendpacket -> ndis [color="#C62828", penwidth=2];
+    usb_send -> ndis [color="#C62828", penwidth=2];
+    ndis -> nic [color="#C62828", penwidth=2];
+    nic -> wire [color="#C62828", penwidth=3];
+}

@@ -1,0 +1,25 @@
+[package]
+name = "sv-publisher"
+version = "1.0.0"
+description = "IEC 61850 Sampled Values Publisher"
+authors = ["SV-PUB Team"]
+edition = "2021"
+
+[lib]
+name = "sv_publisher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+cc = "1.0"
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1.0"
+parking_lot = "0.12"
+lazy_static = "1.4"
+regex = "1"
+

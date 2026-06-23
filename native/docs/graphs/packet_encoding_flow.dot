@@ -1,0 +1,101 @@
+/**
+ * @file packet_encoding_flow.dot
+ * @brief IEC 61850-9-2LE Packet Encoding Flow
+ * 
+ * Render: dot -Tpng packet_encoding_flow.dot -o packet_encoding_flow.png
+ */
+
+digraph PacketEncodingFlow {
+    rankdir=TB;
+    fontname="Segoe UI";
+    fontsize=12;
+    node [fontname="Segoe UI", fontsize=10, style="filled,rounded", shape=box];
+    edge [fontname="Segoe UI", fontsize=9];
+    label="IEC 61850-9-2LE Packet Encoding Flow\n(sv_encoder_encode_packet)\n";
+    labelloc=t;
+    labelfontsize=14;
+
+    // ================================================================
+    // INPUT
+    // ================================================================
+    subgraph cluster_input {
+        label="Inputs";
+        style="filled,rounded"; fillcolor="#E3F2FD"; color="#1565C0";
+
+        smpCnt [label="smpCnt (uint32)\nSample counter 0..(rate-1)", fillcolor="#BBDEFB"];
+        samples [label="samples[channelCount]\nint32_t channel values\nfrom EquationProcessor", fillcolor="#BBDEFB"];
+        config [label="SvEncoderConfig\n• svID, appID, confRev\n• srcMAC, dstMAC\n• vlanID, vlanPriority\n• asduCount, channelCount", fillcolor="#BBDEFB"];
+    }
+
+    // ================================================================
+    // ENCODING STEPS
+    // ================================================================
+
+    step1 [label="① Write Ethernet Header\n[DstMAC: 6B][SrcMAC: 6B]", fillcolor="#C8E6C9", color="#2E7D32"];
+    
+    vlan_check [label="vlanID > 0 ?", fillcolor="#FFF9C4", shape=diamond];
+    
+    step2a [label="② Write 802.1Q VLAN Tag\n[0x81 0x00][Priority|VID]\n[0x88 0xBA] (SV EtherType)", fillcolor="#C8E6C9", color="#2E7D32"];
+    
+    step2b [label="② Write EtherType directly\n[0x88 0xBA] (SV)", fillcolor="#C8E6C9", color="#2E7D32"];
+    
+    step3 [label="③ Write SV APDU Header\n[APPID: 2B][Length: 2B]\n[Reserved1: 0x0000]\n[Reserved2: 0x0000]", fillcolor="#C8E6C9", color="#2E7D32"];
+    
+    step4 [label="④ Write savPdu Container\nTag: 0x60\nLength: (calculated)", fillcolor="#C8E6C9", color="#2E7D32"];
+    
+    step5 [label="⑤ Write noASDU\nTag: 0x80, Len: 0x01\nValue: asduCount", fillcolor="#C8E6C9", color="#2E7D32"];
+    
+    step6 [label="⑥ Write seqASDU Container\nTag: 0xA2\nLength: (calculated)", fillcolor="#C8E6C9", color="#2E7D32"];
+    
+    step7 [label="⑦ Write ASDU Block\nTag: 0x30\nLength: (calculated)", fillcolor="#E1BEE7", color="#6A1B9A"];
+
+    subgraph cluster_asdu {
+        label="Inside each ASDU (0x30)";
+        style="filled,rounded"; fillcolor="#F3E5F5"; color="#6A1B9A";
+
+        svid [label="svID [0x80]\nLength + ASCII string\ne.g., \"MU01\"", fillcolor="#CE93D8"];
+        smpcnt [label="smpCnt [0x82]\nLength: 0x02\nValue: 2 bytes (big-endian)", fillcolor="#CE93D8"];
+        confrev [label="confRev [0x83]\nLength: 0x04\nValue: 4 bytes (big-endian)", fillcolor="#CE93D8"];
+        smpsynch [label="smpSynch [0x85]\nLength: 0x01\nValue: 1 byte", fillcolor="#CE93D8"];
+        seqdata [label="seqData [0x87]\nLength: channelCount × 8\nFor each channel:\n  [Value: 4B big-endian]\n  [Quality: 0x00000000 (4B)]", fillcolor="#BA68C8", penwidth=2];
+    }
+
+    step8 [label="⑧ Pad to Minimum Frame Size\nif (pos < 60): pad with 0x00\n(Ethernet min frame = 64 - 4 FCS)", fillcolor="#C8E6C9", color="#2E7D32"];
+
+    // ================================================================
+    // OUTPUT
+    // ================================================================
+    subgraph cluster_output {
+        label="Output";
+        style="filled,rounded"; fillcolor="#FFEBEE"; color="#C62828";
+
+        frame [label="Complete SV Frame\noutBuffer[0..outSize]\n\nTypical sizes:\n• 8ch no-VLAN:  122 bytes\n• 8ch with-VLAN: 126 bytes\n• 20ch with-VLAN: 222 bytes\n• Multi-ASDU: up to 1500 bytes", fillcolor="#FFCDD2", shape=note];
+    }
+
+    // ================================================================
+    // EDGES
+    // ================================================================
+    
+    config -> step1;
+    smpCnt -> step7 [style=dashed];
+    samples -> seqdata [style=dashed];
+    
+    step1 -> vlan_check;
+    vlan_check -> step2a [label="yes"];
+    vlan_check -> step2b [label="no"];
+    step2a -> step3;
+    step2b -> step3;
+    step3 -> step4;
+    step4 -> step5;
+    step5 -> step6;
+    step6 -> step7;
+    
+    step7 -> svid;
+    svid -> smpcnt;
+    smpcnt -> confrev;
+    confrev -> smpsynch;
+    smpsynch -> seqdata;
+    
+    seqdata -> step8;
+    step8 -> frame;
+}

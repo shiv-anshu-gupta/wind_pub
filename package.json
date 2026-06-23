@@ -1,0 +1,27 @@
+{
+  "name": "tauri-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "tauri": "tauri",
+    "setcap": "sudo setcap 'cap_net_raw,cap_net_admin=eip' src-tauri/target/debug/sv-publisher && echo '✅ Capabilities set on debug binary'",
+    "setcap:release": "sudo setcap 'cap_net_raw,cap_net_admin=eip' src-tauri/target/release/sv-publisher && echo '✅ Capabilities set on release binary'",
+    "dev": "npm run tauri build -- --debug && npm run setcap && npm run tauri dev",
+    "dev:win": "tauri dev",
+    "build:win": "tauri build",
+    "docs": "jsdoc -c web/jsdoc.config.json",
+    "docs:serve": "npx serve web/docs/jsdoc-output",
+    "docs:watch": "nodemon --watch web/js --watch web/shared --ext js --exec \"npm run docs\""
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "docdash": "^2.0.0",
+    "jsdoc": "^4.0.0",
+    "nodemon": "^3.0.0"
+  },
+  "dependencies": {
+    "jsDoc": "npm:jsdoc@^4.0.5"
+  }
+}

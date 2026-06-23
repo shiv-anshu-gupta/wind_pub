@@ -1,0 +1,209 @@
+/**
+ * @file ffi_api_map.dot
+ * @brief Complete FFI API Map — Rust Commands → C++ Functions
+ * 
+ * Render: dot -Tpng ffi_api_map.dot -o ffi_api_map.png
+ */
+
+digraph FFIAPIMap {
+    rankdir=LR;
+    fontname="Segoe UI";
+    fontsize=12;
+    node [fontname="Segoe UI", fontsize=9, style="filled,rounded", shape=box];
+    edge [fontname="Segoe UI", fontsize=8];
+    label="API Map: Tauri Commands → Rust FFI → C++ Functions\n";
+    labelloc=t;
+    labelfontsize=14;
+
+    // ================================================================
+    // TAURI COMMANDS
+    // ================================================================
+    subgraph cluster_tauri {
+        label="Tauri Commands\n(commands.rs)";
+        style="filled,rounded"; fillcolor="#E3F2FD"; color="#1565C0";
+
+        // Interface
+        t_get_interfaces [label="get_interfaces", fillcolor="#BBDEFB"];
+        t_open_interface [label="open_interface", fillcolor="#BBDEFB"];
+        t_close_interface [label="close_interface", fillcolor="#BBDEFB"];
+        t_is_iface_open [label="is_interface_open", fillcolor="#BBDEFB"];
+
+        // Publishing
+        t_start [label="start_publishing", fillcolor="#90CAF9"];
+        t_stop [label="stop_publishing", fillcolor="#90CAF9"];
+        t_get_status [label="get_publish_status", fillcolor="#90CAF9"];
+
+        // Config
+        t_get_config [label="get_config", fillcolor="#BBDEFB"];
+        t_set_config [label="set_config", fillcolor="#BBDEFB"];
+        t_set_channels [label="set_channels", fillcolor="#BBDEFB"];
+
+        // Stats
+        t_get_stats [label="get_stats", fillcolor="#90CAF9"];
+        t_reset_stats [label="reset_stats", fillcolor="#90CAF9"];
+
+        // Duration
+        t_set_duration [label="set_duration_mode", fillcolor="#BBDEFB"];
+        t_get_remaining [label="get_remaining_seconds", fillcolor="#BBDEFB"];
+        t_get_cycle [label="get_current_repeat_cycle", fillcolor="#BBDEFB"];
+        t_is_complete [label="is_duration_complete", fillcolor="#BBDEFB"];
+
+        // Send mode
+        t_set_mode [label="set_send_mode", fillcolor="#BBDEFB"];
+        t_get_mode [label="get_send_mode", fillcolor="#BBDEFB"];
+
+        // Frame inspect
+        t_sample_frame [label="get_sample_frame", fillcolor="#90CAF9"];
+        t_channel_vals [label="get_current_channel_values", fillcolor="#90CAF9"];
+        t_smp_cnt [label="get_current_smp_cnt", fillcolor="#90CAF9"];
+
+        // Multi-publisher
+        t_mp_add [label="mp_add_publisher", fillcolor="#64B5F6"];
+        t_mp_remove [label="mp_remove_publisher", fillcolor="#64B5F6"];
+        t_mp_config [label="mp_configure_publisher", fillcolor="#64B5F6"];
+        t_mp_start [label="mp_start_all", fillcolor="#64B5F6"];
+        t_mp_stop [label="mp_stop_all", fillcolor="#64B5F6"];
+        t_mp_reset [label="mp_reset_all", fillcolor="#64B5F6"];
+        t_mp_running [label="mp_is_running", fillcolor="#64B5F6"];
+
+        // USB
+        t_usb_pad [label="set_usb_pad_size", fillcolor="#BBDEFB"];
+        t_usb_gap [label="set_usb_min_gap_us", fillcolor="#BBDEFB"];
+    }
+
+    // ================================================================
+    // RUST FFI WRAPPERS
+    // ================================================================
+    subgraph cluster_ffi {
+        label="Rust FFI Wrappers\n(ffi.rs)";
+        style="filled,rounded"; fillcolor="#E8F5E9"; color="#2E7D32";
+
+        f_list [label="list_interfaces()", fillcolor="#C8E6C9"];
+        f_open [label="open_interface(&str)", fillcolor="#C8E6C9"];
+        f_close [label="close_interface()", fillcolor="#C8E6C9"];
+        f_is_open [label="is_open()", fillcolor="#C8E6C9"];
+        f_configure [label="publisher_configure(...)", fillcolor="#C8E6C9"];
+        f_start [label="publisher_start()", fillcolor="#C8E6C9"];
+        f_stop [label="publisher_stop()", fillcolor="#C8E6C9"];
+        f_running [label="publisher_is_running()", fillcolor="#C8E6C9"];
+        f_set_eq [label="set_equations(&str)", fillcolor="#C8E6C9"];
+        f_stats_update [label="stats_update_rates()", fillcolor="#C8E6C9"];
+        f_stats_get [label="stats_get()", fillcolor="#C8E6C9"];
+        f_stats_reset [label="stats_reset()", fillcolor="#C8E6C9"];
+        f_set_dur [label="set_duration_mode(...)", fillcolor="#C8E6C9"];
+        f_get_rem [label="get_remaining_seconds()", fillcolor="#C8E6C9"];
+        f_get_cycle [label="get_current_repeat_cycle()", fillcolor="#C8E6C9"];
+        f_is_complete [label="is_duration_complete()", fillcolor="#C8E6C9"];
+        f_set_mode [label="set_send_mode(i32)", fillcolor="#C8E6C9"];
+        f_get_mode [label="get_send_mode()", fillcolor="#C8E6C9"];
+        f_sample [label="get_sample_frame(u32)", fillcolor="#C8E6C9"];
+        f_vals [label="get_current_channel_values()", fillcolor="#C8E6C9"];
+        f_smp [label="get_current_smp_cnt()", fillcolor="#C8E6C9"];
+
+        f_mp_add [label="mp_add_publisher()", fillcolor="#A5D6A7"];
+        f_mp_remove [label="mp_remove_publisher(u32)", fillcolor="#A5D6A7"];
+        f_mp_config [label="mp_configure_publisher(...)", fillcolor="#A5D6A7"];
+        f_mp_start [label="mp_start_all()", fillcolor="#A5D6A7"];
+        f_mp_stop [label="mp_stop_all()", fillcolor="#A5D6A7"];
+        f_mp_reset [label="mp_reset_all()", fillcolor="#A5D6A7"];
+        f_mp_running [label="mp_is_running()", fillcolor="#A5D6A7"];
+
+        f_usb_pad [label="set_usb_pad_size(i32)", fillcolor="#C8E6C9"];
+        f_usb_gap [label="set_usb_min_gap_us(i32)", fillcolor="#C8E6C9"];
+    }
+
+    // ================================================================
+    // C++ FUNCTIONS
+    // ================================================================
+    subgraph cluster_cpp {
+        label="C++ extern \"C\" Functions\n(sv_native.h / sv_controller.h)";
+        style="filled,rounded"; fillcolor="#F3E5F5"; color="#6A1B9A";
+
+        c_list [label="npcap_list_interfaces()", fillcolor="#E1BEE7"];
+        c_open [label="npcap_open()", fillcolor="#E1BEE7"];
+        c_close [label="npcap_close()", fillcolor="#E1BEE7"];
+        c_is_open [label="npcap_is_open()", fillcolor="#E1BEE7"];
+        c_configure [label="npcap_publisher_configure()", fillcolor="#E1BEE7"];
+        c_start [label="npcap_publisher_start()", fillcolor="#E1BEE7"];
+        c_stop [label="npcap_publisher_stop()", fillcolor="#E1BEE7"];
+        c_running [label="npcap_publisher_is_running()", fillcolor="#E1BEE7"];
+        c_eq [label="npcap_set_equations()", fillcolor="#E1BEE7"];
+        c_stats_update [label="npcap_stats_update_rates()", fillcolor="#E1BEE7"];
+        c_stats_get [label="npcap_stats_get()", fillcolor="#E1BEE7"];
+        c_stats_reset [label="npcap_stats_reset()", fillcolor="#E1BEE7"];
+        c_dur [label="npcap_set_duration_mode()", fillcolor="#E1BEE7"];
+        c_rem [label="npcap_get_remaining_seconds()", fillcolor="#E1BEE7"];
+        c_cycle [label="npcap_get_current_repeat_cycle()", fillcolor="#E1BEE7"];
+        c_complete [label="npcap_is_duration_complete()", fillcolor="#E1BEE7"];
+        c_mode [label="npcap_set_send_mode()", fillcolor="#E1BEE7"];
+        c_get_mode [label="npcap_get_send_mode()", fillcolor="#E1BEE7"];
+        c_sample [label="npcap_get_sample_frame()", fillcolor="#E1BEE7"];
+        c_vals [label="npcap_get_current_channel_values()", fillcolor="#E1BEE7"];
+        c_smp [label="npcap_get_current_smp_cnt()", fillcolor="#E1BEE7"];
+
+        c_mp_add [label="sv_mp_add_publisher()", fillcolor="#CE93D8"];
+        c_mp_remove [label="sv_mp_remove_publisher()", fillcolor="#CE93D8"];
+        c_mp_config [label="sv_mp_configure_publisher()", fillcolor="#CE93D8"];
+        c_mp_start [label="sv_mp_start_all()", fillcolor="#CE93D8"];
+        c_mp_stop [label="sv_mp_stop_all()", fillcolor="#CE93D8"];
+        c_mp_reset [label="sv_mp_reset_all()", fillcolor="#CE93D8"];
+        c_mp_running [label="sv_mp_is_running()", fillcolor="#CE93D8"];
+
+        c_usb_pad [label="npcap_set_usb_pad_size()", fillcolor="#E1BEE7"];
+        c_usb_gap [label="npcap_set_usb_min_gap_us()", fillcolor="#E1BEE7"];
+    }
+
+    // ================================================================
+    // EDGES — Tauri → FFI → C++
+    // ================================================================
+
+    // Interface
+    t_get_interfaces -> f_list -> c_list;
+    t_open_interface -> f_open -> c_open;
+    t_close_interface -> f_close -> c_close;
+    t_is_iface_open -> f_is_open -> c_is_open;
+
+    // Publishing
+    t_start -> f_configure [label="1st"];
+    t_start -> f_start [label="2nd"];
+    f_configure -> c_configure;
+    f_start -> c_start;
+    t_stop -> f_stop -> c_stop;
+    t_get_status -> f_running -> c_running;
+
+    // Config / Channels
+    t_set_channels -> f_set_eq -> c_eq;
+
+    // Stats
+    t_get_stats -> f_stats_update -> c_stats_update;
+    t_get_stats -> f_stats_get -> c_stats_get;
+    t_reset_stats -> f_stats_reset -> c_stats_reset;
+
+    // Duration
+    t_set_duration -> f_set_dur -> c_dur;
+    t_get_remaining -> f_get_rem -> c_rem;
+    t_get_cycle -> f_get_cycle -> c_cycle;
+    t_is_complete -> f_is_complete -> c_complete;
+
+    // Send mode
+    t_set_mode -> f_set_mode -> c_mode;
+    t_get_mode -> f_get_mode -> c_get_mode;
+
+    // Frame inspect
+    t_sample_frame -> f_sample -> c_sample;
+    t_channel_vals -> f_vals -> c_vals;
+    t_smp_cnt -> f_smp -> c_smp;
+
+    // Multi-publisher
+    t_mp_add -> f_mp_add -> c_mp_add;
+    t_mp_remove -> f_mp_remove -> c_mp_remove;
+    t_mp_config -> f_mp_config -> c_mp_config;
+    t_mp_start -> f_mp_start -> c_mp_start;
+    t_mp_stop -> f_mp_stop -> c_mp_stop;
+    t_mp_reset -> f_mp_reset -> c_mp_reset;
+    t_mp_running -> f_mp_running -> c_mp_running;
+
+    // USB
+    t_usb_pad -> f_usb_pad -> c_usb_pad;
+    t_usb_gap -> f_usb_gap -> c_usb_gap;
+}

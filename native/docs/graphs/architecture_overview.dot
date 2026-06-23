@@ -1,0 +1,157 @@
+/**
+ * @file architecture_overview.dot
+ * @brief Complete System Architecture — All Layers
+ * 
+ * Render: dot -Tpng architecture_overview.dot -o architecture_overview.png
+ * Or:     dot -Tsvg architecture_overview.dot -o architecture_overview.svg
+ */
+
+digraph ArchitectureOverview {
+    rankdir=TB;
+    fontname="Segoe UI";
+    fontsize=12;
+    node [fontname="Segoe UI", fontsize=11, style="filled,rounded", shape=box];
+    edge [fontname="Segoe UI", fontsize=10];
+    label="SV Publisher — Complete System Architecture\n";
+    labelloc=t;
+    labelfontsize=16;
+    compound=true;
+
+    // ================================================================
+    // FRONTEND LAYER
+    // ================================================================
+    subgraph cluster_frontend {
+        label="Web Frontend (HTML/CSS/JS)";
+        style="filled,rounded"; fillcolor="#E3F2FD"; color="#1565C0";
+        fontcolor="#1565C0"; fontsize=12;
+
+        ui [label="User Interface\n(Configuration Panel)", fillcolor="#BBDEFB", color="#1565C0"];
+        preview [label="Frame Viewer\n(Live Preview)", fillcolor="#BBDEFB", color="#1565C0"];
+        stats_ui [label="Statistics Display\n(Real-time Charts)", fillcolor="#BBDEFB", color="#1565C0"];
+    }
+
+    // ================================================================
+    // TAURI IPC LAYER
+    // ================================================================
+    subgraph cluster_tauri_ipc {
+        label="Tauri IPC Bridge";
+        style="filled,rounded"; fillcolor="#FFF3E0"; color="#E65100";
+        fontcolor="#E65100"; fontsize=12;
+
+        invoke [label="window.__TAURI__\n.invoke('command', args)", fillcolor="#FFE0B2", color="#E65100", shape=parallelogram];
+    }
+
+    // ================================================================
+    // RUST LAYER
+    // ================================================================
+    subgraph cluster_rust {
+        label="Rust Layer (src-tauri/src/)";
+        style="filled,rounded"; fillcolor="#E8F5E9"; color="#2E7D32";
+        fontcolor="#2E7D32"; fontsize=12;
+
+        lib_rs [label="lib.rs\n(Entry Point +\nCommand Registration)", fillcolor="#C8E6C9", color="#2E7D32"];
+        commands_rs [label="commands.rs\n(713 lines)\n43 Tauri Commands", fillcolor="#C8E6C9", color="#2E7D32"];
+        ffi_rs [label="ffi.rs\n(680 lines)\nSafe FFI Wrappers", fillcolor="#C8E6C9", color="#2E7D32"];
+
+        subgraph cluster_rust_state {
+            label="Global State";
+            style="filled,rounded"; fillcolor="#A5D6A7"; color="#1B5E20";
+
+            config_mutex [label="CONFIG\nMutex<SvConfig>", fillcolor="#81C784", shape=cylinder];
+            channels_mutex [label="CHANNELS\nMutex<Vec<Channel>>", fillcolor="#81C784", shape=cylinder];
+            atomics [label="IS_PUBLISHING\nPACKETS_SENT\nBYTES_SENT\nERRORS\n(AtomicBool/U64)", fillcolor="#81C784", shape=cylinder];
+        }
+    }
+
+    // ================================================================
+    // C++ NATIVE LAYER
+    // ================================================================
+    subgraph cluster_cpp {
+        label="C++ Native Layer (native/)";
+        style="filled,rounded"; fillcolor="#F3E5F5"; color="#6A1B9A";
+        fontcolor="#6A1B9A"; fontsize=12;
+
+        subgraph cluster_single {
+            label="Single-Publisher Path";
+            style="filled,rounded"; fillcolor="#E1BEE7"; color="#8E24AA";
+
+            sv_native [label="sv_native_refactored.cc\n(962 lines)\nFFI Entry + Publisher Loop", fillcolor="#CE93D8", color="#6A1B9A"];
+        }
+
+        subgraph cluster_multi {
+            label="Multi-Publisher Path";
+            style="filled,rounded"; fillcolor="#E1BEE7"; color="#8E24AA";
+
+            sv_controller [label="sv_controller.cc\n(1020 lines)\nSvController + SharedBuffer", fillcolor="#CE93D8", color="#6A1B9A"];
+            sv_pub_inst [label="sv_publisher_instance.cc\n(228 lines)\nPer-MU Instance", fillcolor="#CE93D8", color="#6A1B9A"];
+        }
+
+        subgraph cluster_modules {
+            label="Shared Modules";
+            style="filled,rounded"; fillcolor="#D1C4E9"; color="#4527A0";
+
+            sv_encoder [label="sv_encoder_impl.cc\n(286 lines)\nIEC 61850-9-2LE\nPacket Encoding", fillcolor="#B39DDB", color="#4527A0"];
+            eq_processor [label="equation_processor.cc\n(341 lines)\nWaveform Generation\nsin/cos/square/triangle", fillcolor="#B39DDB", color="#4527A0"];
+            sv_stats [label="sv_stats_impl.cc\n(114 lines)\nThread-safe Statistics", fillcolor="#B39DDB", color="#4527A0"];
+            npcap_tx [label="npcap_transmitter_impl.cc\n(339 lines)\nNpcap DLL Loading +\nPacket Transmission", fillcolor="#B39DDB", color="#4527A0"];
+            duration_mgr [label="duration_manager.h\nDuration & Repeat\nControl", fillcolor="#B39DDB", color="#4527A0"];
+        }
+    }
+
+    // ================================================================
+    // SYSTEM/NETWORK LAYER
+    // ================================================================
+    subgraph cluster_network {
+        label="System / Network";
+        style="filled,rounded"; fillcolor="#FFEBEE"; color="#C62828";
+        fontcolor="#C62828"; fontsize=12;
+
+        npcap_dll [label="wpcap.dll\n(Npcap Library)", fillcolor="#FFCDD2", color="#C62828"];
+        ndis [label="NDIS Miniport\nDriver", fillcolor="#FFCDD2", color="#C62828"];
+        nic [label="Network Interface\nCard (NIC)", fillcolor="#FFCDD2", color="#C62828", shape=box3d];
+        ethernet [label="Ethernet Wire\n(IEC 61850 SV Frames)", fillcolor="#EF9A9A", color="#C62828", shape=hexagon];
+    }
+
+    // ================================================================
+    // EDGES — Data Flow
+    // ================================================================
+
+    // Frontend → IPC
+    ui -> invoke [label="config/commands", color="#1565C0"];
+    preview -> invoke [label="get_sample_frame", color="#1565C0", style=dashed];
+    stats_ui -> invoke [label="get_stats (poll)", color="#1565C0", style=dashed];
+
+    // IPC → Rust
+    invoke -> commands_rs [label="Tauri IPC\n(JSON serialize)", color="#E65100"];
+
+    // Rust internal
+    lib_rs -> commands_rs [label="registers", style=dashed, color="#2E7D32"];
+    commands_rs -> ffi_rs [label="calls safe\nwrappers", color="#2E7D32"];
+    commands_rs -> config_mutex [color="#2E7D32", style=dashed];
+    commands_rs -> channels_mutex [color="#2E7D32", style=dashed];
+    commands_rs -> atomics [color="#2E7D32", style=dashed];
+
+    // Rust → C++ FFI
+    ffi_rs -> sv_native [label="extern \"C\"\nnpcap_*", color="#D32F2F", penwidth=2];
+    ffi_rs -> sv_controller [label="extern \"C\"\nsv_mp_*", color="#D32F2F", penwidth=2];
+
+    // C++ internal — single publisher
+    sv_native -> eq_processor [label="generate\nsamples", color="#6A1B9A"];
+    sv_native -> sv_encoder [label="encode\nframes", color="#6A1B9A"];
+    sv_native -> sv_stats [label="record\npackets", color="#6A1B9A"];
+    sv_native -> duration_mgr [label="check\nduration", color="#6A1B9A", style=dashed];
+    sv_native -> npcap_tx [label="send\npackets", color="#D32F2F", penwidth=2];
+
+    // C++ internal — multi publisher
+    sv_controller -> sv_pub_inst [label="manage\ninstances", color="#6A1B9A"];
+    sv_pub_inst -> eq_processor [label="generate\nsamples", color="#6A1B9A"];
+    sv_pub_inst -> sv_encoder [label="encode\nframes", color="#6A1B9A"];
+    sv_controller -> sv_stats [label="record\npackets", color="#6A1B9A"];
+    sv_controller -> npcap_tx [label="send via\nSharedBuffer", color="#D32F2F", penwidth=2];
+
+    // Network
+    npcap_tx -> npcap_dll [label="LoadLibrary\nGetProcAddress", color="#C62828"];
+    npcap_dll -> ndis [label="kernel call", color="#C62828"];
+    ndis -> nic [color="#C62828", penwidth=2];
+    nic -> ethernet [color="#C62828", penwidth=3];
+}

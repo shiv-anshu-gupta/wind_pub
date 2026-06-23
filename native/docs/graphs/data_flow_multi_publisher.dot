@@ -1,0 +1,162 @@
+/**
+ * @file data_flow_multi_publisher.dot
+ * @brief Multi-Publisher Data Flow — SharedBuffer Architecture
+ * 
+ * Render: dot -Tpng data_flow_multi_publisher.dot -o data_flow_multi_publisher.png
+ */
+
+digraph MultiPublisherFlow {
+    rankdir=TB;
+    fontname="Segoe UI";
+    fontsize=12;
+    node [fontname="Segoe UI", fontsize=10, style="filled,rounded", shape=box];
+    edge [fontname="Segoe UI", fontsize=9];
+    label="Multi-Publisher Architecture & Data Flow\n(SvController + SharedBuffer)\n";
+    labelloc=t;
+    labelfontsize=14;
+
+    // ================================================================
+    // FRONTEND COMMANDS
+    // ================================================================
+    subgraph cluster_frontend {
+        label="Frontend Commands";
+        style="filled,rounded"; fillcolor="#E3F2FD"; color="#1565C0";
+
+        mp_add [label="mp_add_publisher()\n→ returns ID (1, 2, 3...)", fillcolor="#BBDEFB"];
+        mp_config [label="mp_configure_publisher(id, {\n  svID, appID, MACs,\n  sampleRate, channels,\n  equations\n})", fillcolor="#BBDEFB"];
+        mp_start [label="mp_start_all()", fillcolor="#BBDEFB", penwidth=2];
+        mp_stop [label="mp_stop_all()", fillcolor="#BBDEFB"];
+        mp_reset [label="mp_reset_all()\n(full cleanup)", fillcolor="#BBDEFB"];
+    }
+
+    // ================================================================
+    // SV CONTROLLER
+    // ================================================================
+    subgraph cluster_controller {
+        label="SvController (Singleton)";
+        style="filled,rounded"; fillcolor="#F3E5F5"; color="#6A1B9A";
+
+        ctrl [label="SvController::instance()\n• m_publishers: vector<unique_ptr>\n• m_sharedBuffer: SharedBuffer\n• m_writerThread\n• m_sendMode, m_durationSeconds\n• m_usbPadSize, m_usbMinGapUs", fillcolor="#E1BEE7"];
+        
+        add_pub [label="addPublisher()\nAllocates new\nSvPublisherInstance\nAssigns unique ID", fillcolor="#CE93D8"];
+        
+        configure [label="configurePublisher(id, config)\n+ setPublisherEquations(id, eq)", fillcolor="#CE93D8"];
+    }
+
+    // ================================================================
+    // PUBLISHER INSTANCES
+    // ================================================================
+    subgraph cluster_instances {
+        label="SvPublisherInstance Objects";
+        style="filled,rounded"; fillcolor="#E8F5E9"; color="#2E7D32";
+
+        pub1 [label="Instance #1 (MU01)\nappID=0x4000, 4800 Hz\n┌─ EquationProcessor #1 ─┐\n│ Ia: 100*sin(2π50t)     │\n│ Ib: 100*sin(2π50t-2π/3)│\n│ ...8 channels          │\n└────────────────────────┘\n┌─ Frame Cache #1 ───────┐\n│ 4800 pre-built frames  │\n│ (1 second of data)     │\n└────────────────────────┘", fillcolor="#C8E6C9"];
+        
+        pub2 [label="Instance #2 (MU02)\nappID=0x4001, 4800 Hz\n┌─ EquationProcessor #2 ─┐\n│ Ia: 200*sin(2π50t+0.1) │\n│ Ib: 200*sin(2π50t-2π/3)│\n│ ...8 channels          │\n└────────────────────────┘\n┌─ Frame Cache #2 ───────┐\n│ 4800 pre-built frames  │\n│ (1 second of data)     │\n└────────────────────────┘", fillcolor="#C8E6C9"];
+        
+        pub_n [label="Instance #N (MUNN)\nappID=0x400N, rate Hz\n┌─ EquationProcessor #N ─┐\n│ Custom equations       │\n└────────────────────────┘\n┌─ Frame Cache #N ───────┐\n│ (rate) pre-built frames│\n└────────────────────────┘", fillcolor="#C8E6C9"];
+    }
+
+    // ================================================================
+    // START ALL — 3 STEPS
+    // ================================================================
+    subgraph cluster_startall {
+        label="startAll() — 3 Steps";
+        style="filled,rounded"; fillcolor="#FFF3E0"; color="#E65100";
+
+        step1 [label="STEP 1: Pre-build Frames\n(Sequential — one at a time)\nfor each publisher:\n  publisher->prebuildFrames()\n  • config global encoder\n  • generate waveforms\n  • encode & cache frames", fillcolor="#FFE0B2"];
+
+        step2 [label="STEP 2: Build SharedBuffer\nbuildFromPublishers(all)\n• Merge all frame caches\n• Stagger timestamps evenly\n• Sort by timestamp (stable)\n• Zero-copy: framePtr → cache", fillcolor="#FFE0B2", penwidth=2];
+
+        step3 [label="STEP 3: Spawn Writer Thread\nTIME_CRITICAL priority\nPinned to CPU core 1\ntimeBeginPeriod(1)", fillcolor="#FFE0B2"];
+    }
+
+    // ================================================================
+    // SHARED BUFFER
+    // ================================================================
+    subgraph cluster_sharedbuf {
+        label="SharedBuffer (Merged Interleaved Schedule)";
+        style="filled,rounded"; fillcolor="#FFFDE7"; color="#F57F17";
+
+        schedule [label="ScheduleEntry[]\nSorted by timestamp_us\n\n┌─────────┬──────────┬─────┬─────┐\n│ Time µs │ FramePtr │ Len │ ID  │\n├─────────┼──────────┼─────┼─────┤\n│    0    │ →MU01[0] │ 126 │  1  │\n│  104    │ →MU02[0] │ 126 │  2  │\n│  208    │ →MU01[1] │ 126 │  1  │\n│  313    │ →MU02[1] │ 126 │  2  │\n│  417    │ →MU01[2] │ 126 │  1  │\n│  521    │ →MU02[2] │ 126 │  2  │\n│  ...    │ ...      │ ... │ ... │\n└─────────┴──────────┴─────┴─────┘\n\nZero-copy: pointers into caches\nImmutable after build (no locking)", fillcolor="#FFF9C4", shape=record];
+
+        cycle_dur [label="cycleDuration_us\n= 1,000,000 µs (1 sec)", fillcolor="#FFF9C4", shape=ellipse];
+    }
+
+    // ================================================================
+    // WRITER THREAD
+    // ================================================================
+    subgraph cluster_writer {
+        label="Writer Thread (Single)";
+        style="filled,rounded"; fillcolor="#FCE4EC"; color="#AD1457";
+
+        writer_start [label="Initialize\nepoch = QPC_now()\nscheduleIdx = 0", fillcolor="#F8BBD0"];
+        
+        get_entry [label="entry = schedule[idx]\nframePtr = entry.framePtr\nframeLen = entry.frameLen", fillcolor="#F8BBD0"];
+
+        send [label="npcap_send_packet(framePtr, frameLen)\nor npcap_send_packet_padded()\n(if USB padding enabled)", fillcolor="#F48FB1", penwidth=2];
+
+        stats [label="stats_record_packet(frameLen)\npackets++, bytes+=len", fillcolor="#F8BBD0"];
+
+        timing_wait [label="Wait for next timestamp\nnext = epoch + entry[idx+1].timestamp_us\n\nBatch: sendqueue_transmit(sync=0/1)\nImmediate: QPC spin-wait", fillcolor="#F8BBD0", shape=diamond];
+
+        cycle_check [label="if idx >= schedule.size():\n  idx = 0 (wrap)\n  check repeat/duration\n  re-anchor epoch", fillcolor="#F8BBD0", shape=diamond];
+    }
+
+    // ================================================================
+    // OUTPUT
+    // ================================================================
+    subgraph cluster_output {
+        label="Network Output";
+        style="filled,rounded"; fillcolor="#FFEBEE"; color="#C62828";
+
+        nic [label="NIC\n(via Npcap)", fillcolor="#FFCDD2", shape=box3d];
+        wire [label="Ethernet:\nMU01 frame, MU02 frame,\nMU01 frame, MU02 frame...\n(interleaved, time-ordered)", fillcolor="#EF9A9A", shape=hexagon];
+    }
+
+    // ================================================================
+    // EDGES
+    // ================================================================
+
+    // Frontend → Controller
+    mp_add -> add_pub;
+    mp_config -> configure;
+    mp_start -> step1 [penwidth=2, color="#E65100"];
+    mp_stop -> ctrl [style=dashed, label="stop writer\njoin thread"];
+    mp_reset -> ctrl [style=dashed, label="full reset"];
+
+    // Controller → Instances
+    add_pub -> pub1 [style=dashed];
+    add_pub -> pub2 [style=dashed];
+    add_pub -> pub_n [style=dashed];
+    configure -> pub1 [style=dashed];
+    configure -> pub2 [style=dashed];
+
+    // Start all steps
+    step1 -> pub1 [label="prebuildFrames()"];
+    step1 -> pub2 [label="prebuildFrames()"];
+    step1 -> pub_n [label="prebuildFrames()"];
+    
+    pub1 -> step2 [label="cache ready"];
+    pub2 -> step2 [label="cache ready"];
+    pub_n -> step2 [label="cache ready"];
+    
+    step2 -> schedule [label="merge + sort", penwidth=2];
+    schedule -> cycle_dur [style=dashed];
+    
+    step2 -> step3;
+    step3 -> writer_start [label="spawn thread", penwidth=2];
+
+    // Writer loop
+    writer_start -> get_entry;
+    get_entry -> send;
+    send -> stats;
+    stats -> timing_wait;
+    timing_wait -> cycle_check;
+    cycle_check -> get_entry [label="next entry"];
+    cycle_check -> writer_start [label="cycle wrap\n(repeat)", style=dashed];
+
+    // Output
+    send -> nic [color="#C62828", penwidth=2];
+    nic -> wire [color="#C62828", penwidth=2];
+}

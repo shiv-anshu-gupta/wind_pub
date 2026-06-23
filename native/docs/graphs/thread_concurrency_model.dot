@@ -1,0 +1,104 @@
+/**
+ * @file thread_concurrency_model.dot
+ * @brief Thread Safety & Concurrency Model
+ * 
+ * Render: dot -Tpng thread_concurrency_model.dot -o thread_concurrency_model.png
+ */
+
+digraph ThreadModel {
+    rankdir=TB;
+    fontname="Segoe UI";
+    fontsize=12;
+    node [fontname="Segoe UI", fontsize=10, style="filled,rounded", shape=box];
+    edge [fontname="Segoe UI", fontsize=9];
+    label="Thread Safety & Concurrency Model\n";
+    labelloc=t;
+    labelfontsize=14;
+
+    // ================================================================
+    // THREADS
+    // ================================================================
+    subgraph cluster_threads {
+        label="Active Threads";
+        style="filled,rounded"; fillcolor="#E0F7FA"; color="#006064";
+
+        tauri_main [label="Tauri Main Thread\n(Event Loop)\n• Handles IPC calls\n• Runs Tauri commands\n• Accesses Rust state", fillcolor="#B2EBF2", shape=box3d];
+
+        publisher_thread [label="Publisher Thread\n(TIME_CRITICAL)\n• Single-pub: publisher_loop_*()\n• Multi-pub: writerLoop()\n• Pinned to CPU core 1\n• timeBeginPeriod(1)", fillcolor="#80DEEA", shape=box3d];
+    }
+
+    // ================================================================
+    // RUST SYNCHRONIZATION
+    // ================================================================
+    subgraph cluster_rust_sync {
+        label="Rust Layer Synchronization";
+        style="filled,rounded"; fillcolor="#E8F5E9"; color="#2E7D32";
+
+        config_mutex [label="CONFIG: Mutex<SvConfig>\n• Locked by: set_config, start_publishing\n• Pattern: lock → clone → drop → use copy", fillcolor="#C8E6C9", shape=cylinder];
+        
+        channels_mutex [label="CHANNELS: Mutex<Vec<Channel>>\n• Locked by: set_channels, get_channels\n• Pass equations to C++ after lock", fillcolor="#C8E6C9", shape=cylinder];
+        
+        interface_mutex [label="CURRENT_INTERFACE: Mutex<Option<String>>\n• Locked by: open/close_interface", fillcolor="#C8E6C9", shape=cylinder];
+        
+        atomics [label="Atomic Variables (lock-free)\n• IS_PUBLISHING: AtomicBool (SeqCst)\n• PACKETS_SENT: AtomicU64 (Relaxed)\n• BYTES_SENT: AtomicU64 (Relaxed)\n• ERRORS: AtomicU64 (Relaxed)", fillcolor="#A5D6A7", shape=octagon];
+    }
+
+    // ================================================================
+    // C++ SYNCHRONIZATION
+    // ================================================================
+    subgraph cluster_cpp_sync {
+        label="C++ Layer Synchronization";
+        style="filled,rounded"; fillcolor="#F3E5F5"; color="#6A1B9A";
+
+        g_mutex [label="g_mutex (std::mutex)\nsv_native_refactored.cc\n• Protects g_config, g_frames\n• Locked during configure/start/stop\n• NOT locked in hot loop", fillcolor="#E1BEE7", shape=cylinder];
+        
+        encoder_mutex [label="g_mutex (std::mutex)\nsv_encoder_impl.cc\n• Protects SvEncoderConfig\n• Locked on config change\n• NOT locked during encode", fillcolor="#E1BEE7", shape=cylinder];
+        
+        stats_mutex [label="g_mutex (std::mutex)\nsv_stats_impl.cc\n• Protects TransmitStats\n• Locked on read/write/update\n• record_packet() is in hot path\n  (small critical section)", fillcolor="#E1BEE7", shape=cylinder];
+        
+        eq_mutex [label="m_mutex (std::mutex)\nEquationProcessor\n• Protects equation data\n• Locked during parse/generate", fillcolor="#E1BEE7", shape=cylinder];
+        
+        ctrl_mutex [label="m_mutex (std::mutex)\nSvController\n• Protects publisher vector\n• Locked during add/remove/config\n• NOT locked in writer loop", fillcolor="#E1BEE7", shape=cylinder];
+
+        g_running [label="g_running: std::atomic<bool>\nm_running: std::atomic<bool>\n• Publisher loop exit flag\n• Checked every iteration\n• No lock needed", fillcolor="#CE93D8", shape=octagon];
+        
+        shared_buf [label="SharedBuffer\n(Immutable after build)\n• Built during startAll()\n• Read-only in writer thread\n• NO LOCKING in hot path", fillcolor="#CE93D8", shape=note];
+    }
+
+    // ================================================================
+    // ACCESS PATTERNS
+    // ================================================================
+    subgraph cluster_patterns {
+        label="Key Design Patterns";
+        style="filled,rounded"; fillcolor="#FFFDE7"; color="#F57F17";
+        
+        pattern1 [label="Pattern: Lock-Clone-Drop\nlet config = CONFIG.lock().clone();\ndrop(lock);\n// use config copy safely", fillcolor="#FFF9C4", shape=note];
+        
+        pattern2 [label="Pattern: Zero-Lock Hot Path\nWriter thread reads only:\n• SharedBuffer (immutable)\n• atomic flags (lock-free)\n• Frame cache (immutable)\nNO mutex contention!", fillcolor="#FFF9C4", shape=note];
+        
+        pattern3 [label="Pattern: Sequential Pre-build\nGlobal encoder used by each\npublisher one-at-a-time\n(mutex not needed if sequential)", fillcolor="#FFF9C4", shape=note];
+    }
+
+    // ================================================================
+    // EDGES
+    // ================================================================
+
+    // Tauri thread accesses
+    tauri_main -> config_mutex [label="set/get config", color="#2E7D32"];
+    tauri_main -> channels_mutex [label="set/get channels", color="#2E7D32"];
+    tauri_main -> interface_mutex [label="set/get interface", color="#2E7D32"];
+    tauri_main -> atomics [label="read/write atomics", color="#2E7D32"];
+    tauri_main -> g_mutex [label="configure/start/stop\n(via FFI)", color="#6A1B9A"];
+    tauri_main -> ctrl_mutex [label="add/remove/config\n(via FFI)", color="#6A1B9A"];
+    tauri_main -> stats_mutex [label="get_stats\n(via FFI)", color="#6A1B9A"];
+
+    // Publisher thread accesses
+    publisher_thread -> g_running [label="check each iteration", color="#AD1457"];
+    publisher_thread -> shared_buf [label="read frames\n(zero-lock)", color="#AD1457", penwidth=2];
+    publisher_thread -> stats_mutex [label="record_packet()\n(brief lock)", color="#AD1457"];
+    
+    // Patterns
+    config_mutex -> pattern1 [style=dashed, color="#F57F17"];
+    shared_buf -> pattern2 [style=dashed, color="#F57F17"];
+    encoder_mutex -> pattern3 [style=dashed, color="#F57F17"];
+}

@@ -1,0 +1,149 @@
+name: Build & Deploy SV Publisher
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:          # manual trigger from Actions tab
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build on ${{ matrix.profile }}
+    runs-on: [self-hosted, Linux, X64]
+    strategy:
+      matrix:
+        profile: [release]
+        include:
+          - profile: release
+            cargo_flag: ""
+            target_dir: release
+
+    steps:
+      # ────────────────────────────────────────────────────────────
+      # 1. Checkout latest code
+      # ────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ────────────────────────────────────────────────────────────
+      # 2. Verify build dependencies
+      # ────────────────────────────────────────────────────────────
+      - name: Verify build dependencies
+        run: |
+          echo "── Toolchain versions ──"
+          rustc --version
+          cargo --version
+          node  --version
+          npm   --version
+          g++   --version | head -1
+          echo ""
+          echo "── Required libraries ──"
+          pkg-config --exists --print-errors \
+            webkit2gtk-4.1 \
+            gtk+-3.0 \
+            libpcap \
+            openssl
+          echo "All dependencies OK"
+
+      # ────────────────────────────────────────────────────────────
+      # 4. Cache Cargo registry + build artifacts
+      # ────────────────────────────────────────────────────────────
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-registry-
+
+      - name: Cache Cargo build (${{ matrix.profile }})
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/target/${{ matrix.target_dir }}
+          key: cargo-build-${{ matrix.profile }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/src/**', 'native/src/**', 'native/include/**') }}
+          restore-keys: cargo-build-${{ matrix.profile }}-
+
+      # ────────────────────────────────────────────────────────────
+      # 5. Install npm           dependencies (for Tauri CLI  )
+      # ────────────────────────────────────────────────────────────
+      - name: Install npm dependencies
+        run: npm install
+
+      # ────────────────────────────────────────────────────────────
+      # 6. Build (Rust + C++ native library + Tauri bundle)
+      # ────────────────────────────────────────────────────────────
+      - name: Build Tauri app (${{ matrix.profile }})
+        run: npx tauri build ${{ matrix.cargo_flag }}
+
+      # ────────────────────────────────────────────────────────────
+      # 6. Set raw socket capabilities (setcap)
+      #    Note: requires passwordless sudo — if not configured,
+      #    run manually: sudo setcap 'cap_net_raw,cap_net_admin=eip' <binary>
+      # ────────────────────────────────────────────────────────────
+      - name: Set network capabilities (setcap)
+        continue-on-error: true
+        run: |
+          BINARY="src-tauri/target/${{ matrix.target_dir }}/sv-publisher"
+          if [ -f "$BINARY" ]; then
+            if sudo -n setcap 'cap_net_raw,cap_net_admin=eip' "$BINARY" 2>/dev/null; then
+              echo "✅ Capabilities set on ${{ matrix.profile }} binary"
+              getcap "$BINARY"
+            else
+              echo "⚠️ setcap requires passwordless sudo. Run manually on the device:"
+              echo "  sudo setcap 'cap_net_raw,cap_net_admin=eip' $(realpath $BINARY)"
+            fi
+          else
+            echo "❌ Binary not found at $BINARY"
+            exit 1
+          fi
+
+      # ────────────────────────────────────────────────────────────
+      # 8. Verify the binary runs
+      # ────────────────────────────────────────────────────────────
+      - name: Smoke test binary
+        run: |
+          BINARY="src-tauri/target/${{ matrix.target_dir }}/sv-publisher"
+          file "$BINARY"
+          ldd  "$BINARY" | head -10
+          echo "✅ Binary is valid"
+
+      # ────────────────────────────────────────────────────────────
+      # 9. Upload build artifacts
+      # ────────────────────────────────────────────────────────────
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sv-publisher-${{ matrix.profile }}-linux-x64
+          path: src-tauri/target/${{ matrix.target_dir }}/sv-publisher
+          retention-days: 7
+
+      - name: Upload bundle artifacts
+        if: matrix.profile == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sv-publisher-bundles-linux-x64
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          retention-days: 14
+          if-no-files-found: warn
+
+      # ────────────────────────────────────────────────────────────
+      # 10. Build summary
+      # ────────────────────────────────────────────────────────────
+      - name: Build summary
+        run: |
+          BINARY="src-tauri/target/${{ matrix.target_dir }}/sv-publisher"
+          SIZE=$(du -h "$BINARY" | cut -f1)
+          echo "### ✅ Build Complete (${{ matrix.profile }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Profile | \`${{ matrix.profile }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Binary | \`$BINARY\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Size | $SIZE |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rust | \`$(rustc --version)\` |" >> $GITHUB_STEP_SUMMARY

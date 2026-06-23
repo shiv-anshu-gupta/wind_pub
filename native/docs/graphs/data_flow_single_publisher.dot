@@ -1,0 +1,137 @@
+/**
+ * @file data_flow_single_publisher.dot
+ * @brief Single-Publisher Data Flow — From Config to Network
+ * 
+ * Render: dot -Tpng data_flow_single_publisher.dot -o data_flow_single_publisher.png
+ */
+
+digraph SinglePublisherFlow {
+    rankdir=TB;
+    fontname="Segoe UI";
+    fontsize=12;
+    node [fontname="Segoe UI", fontsize=10, style="filled,rounded", shape=box];
+    edge [fontname="Segoe UI", fontsize=9];
+    label="Single-Publisher Data Flow\n(Frontend → Rust → C++ → Network)\n";
+    labelloc=t;
+    labelfontsize=14;
+
+    // ================================================================
+    // CONFIGURATION PHASE
+    // ================================================================
+    subgraph cluster_config {
+        label="1. Configuration Phase";
+        style="filled,rounded"; fillcolor="#E3F2FD"; color="#1565C0";
+
+        set_config [label="set_config(SvConfig)\n• svID, appID, MACs\n• sampleRate, frequency\n• vlanID, noASDU\n• channelCount (1-20)", fillcolor="#BBDEFB"];
+        set_channels [label="set_channels(Vec<Channel>)\n• id: \"Ia\", \"Ib\", ...\n• equation: \"100*sin(2*PI*50*t)\"\n• type: current/voltage", fillcolor="#BBDEFB"];
+        set_duration [label="set_duration_mode()\n• durationSeconds\n• repeatEnabled\n• repeatCount", fillcolor="#BBDEFB"];
+        set_mode [label="set_send_mode(mode)\n0=auto, 1=batch\n2=immediate, 3=USB", fillcolor="#BBDEFB"];
+    }
+
+    // ================================================================
+    // FFI BRIDGE
+    // ================================================================
+    subgraph cluster_ffi {
+        label="2. FFI Bridge (ffi.rs)";
+        style="filled,rounded"; fillcolor="#FFF3E0"; color="#E65100";
+
+        ffi_config [label="publisher_configure()\nCString conversion\nMAC pointer passing", fillcolor="#FFE0B2"];
+        ffi_eq [label="set_equations()\nFormat: \"Ia:eq1|Ib:eq2|...\"", fillcolor="#FFE0B2"];
+        ffi_duration [label="set_duration_mode()\nbool → c_int conversion", fillcolor="#FFE0B2"];
+        ffi_start [label="publisher_start()\n→ returns 0 / -1", fillcolor="#FFE0B2"];
+    }
+
+    // ================================================================
+    // C++ PRE-BUILD PHASE
+    // ================================================================
+    subgraph cluster_prebuild {
+        label="3. Pre-Build Phase (C++)";
+        style="filled,rounded"; fillcolor="#E8F5E9"; color="#2E7D32";
+
+        parse_eq [label="Equation Parsing\neq_load_equations()\n• Split by '|'\n• Parse amplitude, freq, phase\n• Detect waveform type", fillcolor="#C8E6C9"];
+        
+        config_encoder [label="Configure Encoder\nsv_encoder_set_config()\n• Set MACs, VLAN, APPID\n• Set channelCount", fillcolor="#C8E6C9"];
+
+        prebuild [label="prebuild_frames()\nFor smpCnt = 0 to (rate-1):", fillcolor="#A5D6A7", penwidth=2];
+        
+        gen_time [label="t = smpCnt / sampleRate", fillcolor="#C8E6C9", shape=ellipse];
+        gen_samples [label="eq_generate_all_samples(t)\namp × waveform(2πft + φ) × 1000\n→ int32_t[channelCount]", fillcolor="#C8E6C9"];
+        encode [label="sv_encoder_encode_packet()\n→ ETH + VLAN + SV APDU + ASN.1\n→ frame bytes", fillcolor="#C8E6C9"];
+        store [label="Cache: frames[smpCnt]\nframeLens[smpCnt]", fillcolor="#C8E6C9", shape=cylinder];
+    }
+
+    // ================================================================
+    // HOT PUBLISHING LOOP
+    // ================================================================
+    subgraph cluster_hotloop {
+        label="4. Hot Publishing Loop (zero-alloc)";
+        style="filled,rounded"; fillcolor="#FFF3E0"; color="#E65100";
+
+        loop_start [label="Thread Start\nelevate_thread_priority()\nTIME_CRITICAL, core 1\ntimeBeginPeriod(1)", fillcolor="#FFE0B2"];
+        epoch [label="Set Epoch\nepoch = QPC_now()\nidx = 0", fillcolor="#FFE0B2", shape=diamond];
+        
+        get_frame [label="frame = cache[idx % N]\nframeLen = frameLens[idx % N]", fillcolor="#FFE0B2"];
+        send_pkt [label="npcap_send_packet(frame, len)\nor npcap_queue_transmit()", fillcolor="#FF8A65", penwidth=2];
+        record [label="stats_record_packet(len)\npackets_sent++\nbytes_sent += len", fillcolor="#FFE0B2"];
+        
+        timing [label="Pacing Strategy\n• SLEEP+SPIN (≤4800 pps)\n• Pure SPIN (≤50000 pps)\n• NO WAIT (>50000 pps)", fillcolor="#FFE0B2", shape=diamond];
+        
+        duration_check [label="Check Duration\nif elapsed > durationSec:\n  next cycle or stop", fillcolor="#FFE0B2", shape=diamond];
+        
+        idx_inc [label="idx++", fillcolor="#FFE0B2", shape=ellipse];
+    }
+
+    // ================================================================
+    // NETWORK
+    // ================================================================
+    subgraph cluster_net {
+        label="5. Network Output";
+        style="filled,rounded"; fillcolor="#FFEBEE"; color="#C62828";
+        
+        pcap [label="pcap_sendpacket()\nor pcap_sendqueue_transmit()", fillcolor="#FFCDD2"];
+        wire [label="IEC 61850-9-2LE\nSV Ethernet Frame\non the wire", fillcolor="#EF9A9A", shape=hexagon];
+    }
+
+    // ================================================================
+    // EDGES
+    // ================================================================
+
+    // Config phase
+    set_config -> ffi_config;
+    set_channels -> ffi_eq;
+    set_duration -> ffi_duration;
+    set_mode -> ffi_start [style=dashed, label="then"];
+
+    // FFI to C++
+    ffi_config -> config_encoder [label="extern \"C\""];
+    ffi_eq -> parse_eq [label="extern \"C\""];
+    ffi_duration -> prebuild [style=dashed];
+    ffi_start -> prebuild [label="npcap_publisher_start()", penwidth=2];
+
+    // Pre-build
+    parse_eq -> prebuild;
+    config_encoder -> prebuild;
+    prebuild -> gen_time;
+    gen_time -> gen_samples;
+    gen_samples -> encode;
+    encode -> store;
+    store -> prebuild [label="next smpCnt", style=dashed, constraint=false];
+
+    // Pre-build → Hot loop
+    store -> loop_start [label="all frames cached\nspawn thread", penwidth=2];
+
+    // Hot loop
+    loop_start -> epoch;
+    epoch -> get_frame;
+    get_frame -> send_pkt;
+    send_pkt -> record;
+    record -> timing;
+    timing -> duration_check;
+    duration_check -> idx_inc [label="continue"];
+    duration_check -> pcap [label="stop\n(duration elapsed)", style=dashed, color="#C62828"];
+    idx_inc -> get_frame [label="loop"];
+
+    // Network
+    send_pkt -> pcap [label="via npcap", color="#C62828", penwidth=2];
+    pcap -> wire [color="#C62828", penwidth=2];
+}

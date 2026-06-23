@@ -1,0 +1,13 @@
+/* Tailwind v4 input — compiled at build time into tailwind.css.
+ *
+ * Replaces the runtime in-browser JIT (vendor/tailwind.browser.js), which
+ * recompiled CSS on every DOM mutation and pegged the WebKit process at ~50%
+ * CPU. The @source globs tell the scanner where utility classes are used so
+ * only those are emitted. Regenerate with:
+ *   npx @tailwindcss/cli@4.3.0 -i web/tailwind.src.css -o web/tailwind.css --minify
+ */
+@import "tailwindcss";
+
+@source "./index.html";
+@source "./js/**/*.js";
+@source "./shared/**/*.js";

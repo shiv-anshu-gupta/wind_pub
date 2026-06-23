@@ -1,0 +1,133 @@
+/**
+ * @file equation_processing_flow.dot
+ * @brief Equation Parsing & Waveform Generation Flow
+ * 
+ * Render: dot -Tpng equation_processing_flow.dot -o equation_processing_flow.png
+ */
+
+digraph EquationFlow {
+    rankdir=TB;
+    fontname="Segoe UI";
+    fontsize=12;
+    node [fontname="Segoe UI", fontsize=10, style="filled,rounded", shape=box];
+    edge [fontname="Segoe UI", fontsize=9];
+    label="Equation Processing & Waveform Generation\n";
+    labelloc=t;
+    labelfontsize=14;
+
+    // ================================================================
+    // INPUT
+    // ================================================================
+    subgraph cluster_input {
+        label="1. Frontend Input";
+        style="filled,rounded"; fillcolor="#E3F2FD"; color="#1565C0";
+
+        raw_eq [label="Equation String from Frontend\n\"Ia:100*sin(2*PI*50*t)|\nIb:100*sin(2*PI*50*t-2*PI/3)|\nIc:100*sin(2*PI*50*t-4*PI/3)|\nIn:0|\nVa:325*sin(2*PI*50*t)|\nVb:325*sin(2*PI*50*t-2*PI/3)|\nVc:325*sin(2*PI*50*t-4*PI/3)|\nVn:0\"", fillcolor="#BBDEFB", shape=note];
+    }
+
+    // ================================================================
+    // PARSING
+    // ================================================================
+    subgraph cluster_parsing {
+        label="2. Equation Parsing (eq_load_equations)";
+        style="filled,rounded"; fillcolor="#E8F5E9"; color="#2E7D32";
+
+        split_pipe [label="Split by '|'\ninto id:equation pairs", fillcolor="#C8E6C9"];
+        split_colon [label="Split by ':'\nid = \"Ia\"\nequation = \"100*sin(2*PI*50*t)\"", fillcolor="#C8E6C9"];
+
+        subgraph cluster_parse_details {
+            label="eq_parse_equation()";
+            style="filled,rounded"; fillcolor="#A5D6A7"; color="#1B5E20";
+
+            parse_amp [label="parse_amplitude()\nExtract coefficient before '*'\n\"100*sin(...)\" → amp = 100.0", fillcolor="#81C784"];
+            parse_freq [label="parse_frequency()\nFind 'PI*f*t' pattern\n\"2*PI*50*t\" → freq = 50.0", fillcolor="#81C784"];
+            parse_phase [label="parse_phase()\nRecognize patterns:\n\"-2*PI/3\" → -2.094 rad\n\"-4*PI/3\" → -4.189 rad\n\"-PI/2\"   → -1.571 rad", fillcolor="#81C784"];
+            parse_wave [label="parse_wavetype()\nDetect function name:\nsin() → SINE\ncos() → COSINE\nsquare() → SQUARE\ntriangle() → TRIANGLE", fillcolor="#81C784"];
+        }
+    }
+
+    // ================================================================
+    // CHANNEL DATA
+    // ================================================================
+    subgraph cluster_channels {
+        label="3. Parsed Channel Data (EqChannelData[20])";
+        style="filled,rounded"; fillcolor="#F3E5F5"; color="#6A1B9A";
+
+        ch_table [label=<
+<TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+<TR><TD BGCOLOR="#CE93D8"><B>ID</B></TD><TD BGCOLOR="#CE93D8"><B>Amplitude</B></TD><TD BGCOLOR="#CE93D8"><B>Freq</B></TD><TD BGCOLOR="#CE93D8"><B>Phase</B></TD><TD BGCOLOR="#CE93D8"><B>Wave</B></TD></TR>
+<TR><TD>Ia</TD><TD>100.0</TD><TD>50 Hz</TD><TD>0</TD><TD>SINE</TD></TR>
+<TR><TD>Ib</TD><TD>100.0</TD><TD>50 Hz</TD><TD>-2π/3</TD><TD>SINE</TD></TR>
+<TR><TD>Ic</TD><TD>100.0</TD><TD>50 Hz</TD><TD>-4π/3</TD><TD>SINE</TD></TR>
+<TR><TD>In</TD><TD>0.0</TD><TD>—</TD><TD>—</TD><TD>ZERO</TD></TR>
+<TR><TD>Va</TD><TD>325.0</TD><TD>50 Hz</TD><TD>0</TD><TD>SINE</TD></TR>
+<TR><TD>Vb</TD><TD>325.0</TD><TD>50 Hz</TD><TD>-2π/3</TD><TD>SINE</TD></TR>
+<TR><TD>Vc</TD><TD>325.0</TD><TD>50 Hz</TD><TD>-4π/3</TD><TD>SINE</TD></TR>
+<TR><TD>Vn</TD><TD>0.0</TD><TD>—</TD><TD>—</TD><TD>ZERO</TD></TR>
+</TABLE>
+        >, shape=plaintext];
+    }
+
+    // ================================================================
+    // SAMPLE GENERATION
+    // ================================================================
+    subgraph cluster_generation {
+        label="4. Sample Generation (eq_generate_sample)";
+        style="filled,rounded"; fillcolor="#FFF3E0"; color="#E65100";
+
+        time_calc [label="Time Calculation\nt = smpCnt / sampleRate\ne.g., t = 42 / 4800 = 0.00875s", fillcolor="#FFE0B2"];
+        
+        formula [label="For each channel:\nvalue = amplitude ×\n  waveform(2π × freq × t + phase)\n  × scaleFactor\n\nscaleFactor = 1000.0", fillcolor="#FFE0B2", penwidth=2];
+
+        subgraph cluster_waveforms {
+            label="Waveform Functions";
+            style="filled,rounded"; fillcolor="#FFE0B2"; color="#E65100";
+            
+            sine [label="SINE\nsin(θ)", fillcolor="#FFCC80"];
+            cosine [label="COSINE\ncos(θ)", fillcolor="#FFCC80"];
+            square [label="SQUARE\nsin(θ) ≥ 0 ? +1 : -1", fillcolor="#FFCC80"];
+            triangle [label="TRIANGLE\n(2/π) × asin(sin(θ))", fillcolor="#FFCC80"];
+        }
+
+        output_val [label="Output: int32_t\ne.g., Ia at t=0.00875:\n100 × sin(2π×50×0.00875) × 1000\n= 100 × sin(2.749) × 1000\n= 100 × 0.3827 × 1000\n= 38,268", fillcolor="#FFE0B2", shape=note];
+    }
+
+    // ================================================================
+    // OUTPUT TO ENCODER
+    // ================================================================
+    subgraph cluster_output {
+        label="5. Output to Encoder";
+        style="filled,rounded"; fillcolor="#FFEBEE"; color="#C62828";
+
+        samples_array [label="int32_t samples[channelCount]\n[38268, -70711, 32443, 0,\n 124361, -230000, 105640, 0]", fillcolor="#FFCDD2"];
+        
+        encoder [label="→ sv_encoder_encode_packet()\nEach value written as 4 bytes\nbig-endian in seqData", fillcolor="#FFCDD2"];
+    }
+
+    // ================================================================
+    // EDGES
+    // ================================================================
+
+    raw_eq -> split_pipe;
+    split_pipe -> split_colon;
+    split_colon -> parse_amp;
+    split_colon -> parse_freq;
+    split_colon -> parse_phase;
+    split_colon -> parse_wave;
+    
+    parse_amp -> ch_table;
+    parse_freq -> ch_table;
+    parse_phase -> ch_table;
+    parse_wave -> ch_table;
+
+    ch_table -> time_calc;
+    time_calc -> formula;
+    formula -> sine [style=dashed];
+    formula -> cosine [style=dashed];
+    formula -> square [style=dashed];
+    formula -> triangle [style=dashed];
+    formula -> output_val;
+
+    output_val -> samples_array;
+    samples_array -> encoder;
+}
