@@ -6,13 +6,25 @@ and gets the full publisher backend's powers from her own `main()`.
 ## Folder layout
 
 ```
-substation_kit/
-├── include/SubstationKit.h        ← her ONLY #include
-├── src/SubstationKit.cc            ← library implementation
-├── example/sim_example.cpp         ← runnable starter
-├── CMakeLists.txt                  ← build it as a static library
-└── README.md                       ← this file
+<parent>/
+├── substation_kit/
+│   ├── include/SubstationKit.h     ← her ONLY #include
+│   ├── src/SubstationKit.cc        ← library implementation
+│   ├── example/sim_example.cpp     ← runnable starter
+│   ├── CMakeLists.txt              ← build it as a static library
+│   └── README.md                   ← this file
+└── native/                         ← REQUIRED sibling: shared backend sources
+    ├── src/   (SvEncoder.cc, Goose*.cc, PcapTx.cc, …)
+    └── include/
 ```
+
+> **Ship both folders.** `substation_kit/` compiles the shared C++ in the
+> sibling `native/` folder; the kit's `CMakeLists.txt` resolves it as
+> `../native` by default. Keep the two side by side (or point
+> `-DSUBSTATION_PUBLISHER_NATIVE=/path/to/native` at it). Everything else the
+> kit needs (the rigtorp MPMC queue) is bundled under
+> `include/third_party/`, so those two folders are the complete, self-contained
+> handoff — no Tauri, Rust, libuv, uWebSockets, or Node.
 
 ## What the library gives her
 
