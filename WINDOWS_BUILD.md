@@ -184,3 +184,64 @@ driver-access rules as the app (Administrator only if Npcap was installed with
 > The old hand-written `service/ws_server.cc` targeted the removed
 > single-publisher C ABI and is intentionally **not** compiled; `main.cpp` now
 > just starts `PubWsServer` and blocks.
+
+---
+
+## Building the backend with MinGW / g++ (team-preferred toolchain)
+
+Team policy is to build C/C++ with **g++/gcc only** — the same compiler on
+Linux, Windows, and (future) ARM. The **backend** — the standalone
+`service/` and the embeddable `substation_kit/` — is pure C++ and builds with
+**MinGW-w64 g++**, no MSVC required.
+
+> Scope note: this MinGW path covers the **backend** (`service/` +
+> `substation_kit/` + the shared `native/` sources). The **Tauri GUI app**
+> (`src-tauri/`) still builds with MSVC for now — WebView2, `windows-rs`, and
+> the NSIS bundler are tuned for the MSVC Rust target. The backend is what a
+> remote frontend or an embedding app (e.g. `substation_kit`) actually needs.
+
+### What made it MinGW-clean
+
+All OS code is behind `#ifdef _WIN32`; the few MSVC-only pieces are now guarded
+under `#ifdef _MSC_VER` so g++ skips them:
+
+| MSVC-only construct | MinGW handling |
+|---|---|
+| `#pragma comment(lib, …)` (ws2_32/iphlpapi/winmm) | Ignored by g++; the libs are linked by the build system instead. |
+| `delayimp.h` + `/DELAYLOAD:wpcap.dll` delay-load hook | Dropped. `GooseReceiver.cc` now loads `wpcap.dll` via `LoadLibrary`/`GetProcAddress` (like `PcapTx.cc` already did), so **nothing links wpcap at load time** — no import lib, no delay-load, identical under MSVC and MinGW. |
+| `strtok_s` / `_strdup` remaps | Only under MSVC; MinGW-w64 provides POSIX `strtok_r` / `strdup`. |
+| `_mm_pause()` intrinsic | Non-MSVC already used `__builtin_ia32_pause()` (x86) / `yield` (ARM). |
+
+### Prerequisites (MinGW)
+
+1. **MinGW-w64 toolchain** via [MSYS2](https://www.msys2.org/):
+   ```bash
+   pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake
+   ```
+2. **libuv** (for `service/` only — `substation_kit` doesn't use it):
+   ```bash
+   pacman -S mingw-w64-x86_64-libuv
+   ```
+   CMake finds it on the MSYS2 mingw prefix automatically; override with
+   `LIBUV_DIR` (a root with `include/uv.h` and `lib/libuv*.a`).
+3. **Npcap SDK** headers extracted to `C:\npcap-sdk` (or set `NPCAP_SDK_DIR`).
+   Only the headers are needed — `wpcap.dll` is loaded dynamically at runtime.
+4. **Npcap runtime** installed (WinPcap-compatible mode) to actually send/receive.
+
+### Build the service (MinGW)
+
+From `service/`, in a **MSYS2 MinGW64** shell:
+
+```bash
+cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+./build/sv_publisher_service.exe 9001
+```
+
+The `.exe` static-links `libstdc++`/`libgcc`/`winpthread`, so it runs without
+shipping MinGW runtime DLLs. Run as **Administrator** to send raw frames.
+
+### Build substation_kit (MinGW)
+
+See `substation_kit/README.md` — `cmake -G "MinGW Makefiles"`, or the plain
+`x86_64-w64-mingw32-g++` one-liner. No libuv, no MSVC, pure g++.

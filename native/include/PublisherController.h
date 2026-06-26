@@ -60,8 +60,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <mmsystem.h>
-#pragma comment(lib, "winmm.lib")
 #ifdef _MSC_VER
+#pragma comment(lib, "winmm.lib")  /* MinGW links winmm via the build system */
 #include <intrin.h>
 #endif
 #else

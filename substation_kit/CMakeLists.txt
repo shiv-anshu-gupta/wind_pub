@@ -24,8 +24,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(SUBSTATION_PUBLISHER_NATIVE "${CMAKE_CURRENT_SOURCE_DIR}/../native"
     CACHE PATH "Path to publisher's native/ folder")
 
-find_library(PCAP_LIB pcap REQUIRED)
-
 add_library(substation_kit STATIC
     src/SubstationKit.cc
     ${SUBSTATION_PUBLISHER_NATIVE}/src/asn1_ber_encoder.cc
@@ -58,10 +56,40 @@ target_include_directories(substation_kit PUBLIC
     ${SUBSTATION_PUBLISHER_NATIVE}/src
 )
 
-target_link_libraries(substation_kit PUBLIC
-    ${PCAP_LIB}
-    pthread
-)
+# Threads::Threads resolves to pthread on Linux and to the right thing on
+# MinGW (winpthread) — portable across both toolchains.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
+if(WIN32)
+    # ── Windows / MinGW ──────────────────────────────────────────────────────
+    # NO libpcap and NO wpcap import library: GooseReceiver.cc + PcapTx.cc load
+    # wpcap.dll dynamically at runtime. We only need the Npcap SDK *headers*
+    # (<pcap/pcap.h>) for the pcap structs/constants GooseReceiver references.
+    if(DEFINED ENV{NPCAP_SDK_DIR})
+        set(NPCAP_SDK $ENV{NPCAP_SDK_DIR})
+    else()
+        set(NPCAP_SDK "C:/npcap-sdk")
+    endif()
+    if(NOT EXISTS "${NPCAP_SDK}/Include/pcap/pcap.h")
+        message(FATAL_ERROR
+            "Npcap SDK headers not found at ${NPCAP_SDK}. Download the SDK zip "
+            "from https://npcap.com/#download and extract to C:\\npcap-sdk "
+            "(or set NPCAP_SDK_DIR). Only the headers are needed — wpcap.dll is "
+            "loaded dynamically at runtime.")
+    endif()
+    target_include_directories(substation_kit PRIVATE ${NPCAP_SDK}/Include)
+    target_compile_definitions(substation_kit PRIVATE
+        WIN32 _WINDOWS WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0601 NOMINMAX
+        _CRT_SECURE_NO_WARNINGS _WINSOCK_DEPRECATED_NO_WARNINGS)
+    # winsock + adapter enumeration (PcapTx), multimedia timer (timeBeginPeriod).
+    target_link_libraries(substation_kit PUBLIC
+        Threads::Threads ws2_32 iphlpapi winmm)
+else()
+    # ── Linux / macOS ────────────────────────────────────────────────────────
+    find_library(PCAP_LIB pcap REQUIRED)
+    target_link_libraries(substation_kit PUBLIC ${PCAP_LIB} Threads::Threads)
+endif()
 
 target_compile_options(substation_kit PRIVATE -O2 -Wall -Wno-interference-size)
 

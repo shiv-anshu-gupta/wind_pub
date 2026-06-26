@@ -79,7 +79,34 @@ target_include_directories(your_simulator PRIVATE substation_kit/include)
 ```
 
 That's it. The kit's `CMakeLists.txt` collects all the publisher backend
-source files it needs.
+source files it needs. It auto-detects the platform: on Linux it links system
+`libpcap`; on Windows it loads `wpcap.dll` dynamically at runtime (so no pcap
+import library is linked) and links the Winsock/iphlpapi/winmm system libs.
+
+### Windows build (MinGW / g++ — the only supported Windows toolchain)
+
+Per team policy the kit builds with **g++/gcc only** (the same compiler as
+Linux), via **MinGW-w64**. There is no MSVC requirement and no Rust/Tauri/libuv
+involved — the kit is pure C++.
+
+Prerequisites:
+- **MinGW-w64** with g++ (e.g. via [MSYS2](https://www.msys2.org/):
+  `pacman -S mingw-w64-x86_64-toolchain`), and CMake.
+- **Npcap SDK** headers — download the SDK zip from
+  <https://npcap.com/#download> and extract to `C:\npcap-sdk` (or set
+  `NPCAP_SDK_DIR`). Only the headers are needed; `wpcap.dll` is loaded at
+  runtime.
+- **Npcap runtime** installed (to actually send/receive frames) — tick
+  *"Install Npcap in WinPcap API-compatible Mode"*.
+
+```powershell
+# from her project root (after add_subdirectory(substation_kit) as above)
+cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+Raw Ethernet TX needs elevated privileges on Windows (the Npcap driver enforces
+it): run her simulator **as Administrator**. There is no `setcap` equivalent.
 
 ### Option 2 — Plain `g++` (zero build system)
 
@@ -109,6 +136,25 @@ g++ -std=c++17 -O2 \
     -Ipublisher/custom/native/src \
     -lpcap -lpthread \
     -o your_sim
+```
+
+On **Windows with MinGW** the same one-liner becomes (note: no `-lpcap` —
+`wpcap.dll` is loaded at runtime; add the Npcap SDK include and the Windows
+system libs instead):
+
+```bash
+x86_64-w64-mingw32-g++ -std=c++17 -O2 \
+    your_sim.cpp \
+    substation_kit/src/SubstationKit.cc \
+    native/src/asn1_ber_encoder.cc native/src/SvEncoder.cc native/src/SvStats.cc \
+    native/src/GooseEncoder.cc native/src/GooseTxScheduler.cc native/src/GooseReceiver.cc \
+    native/src/GooseService.cc native/src/SpscBridge.cc native/src/PublisherController.cc \
+    native/src/SharedBuffer.cc native/src/sv_publisher_instance.cc native/src/equation_processor.cc \
+    native/src/fault_injector.cc native/src/cid_generator.cc native/src/PcapTx.cc \
+    -Isubstation_kit/include -Inative/include -Inative/src -IC:/npcap-sdk/Include \
+    -static-libstdc++ -static-libgcc \
+    -lws2_32 -liphlpapi -lwinmm \
+    -o your_sim.exe
 ```
 
 ### Capabilities (Linux)

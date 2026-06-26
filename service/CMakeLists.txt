@@ -5,19 +5,26 @@
 # This is the separate "run the backend on its own" workflow (the Linux/Yocto
 # `sv_publisher_service`), now buildable on Windows too.
 #
-# Build (Windows, from service/):
+# Build (Windows / MinGW-g++  — preferred, from service/):
+#   cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+#   cmake --build build -j
+#   .\build\sv_publisher_service.exe [port]             (default 9001)
+#
+# Build (Windows / MSVC, from service/):
 #   cmake -B build -G "Visual Studio 17 2022" -A x64
 #   cmake --build build --config Release
-# Run:
-#   .\build\Release\sv_publisher_service.exe [port]     (default 9001)
+#   .\build\Release\sv_publisher_service.exe [port]
 #
 # Build (Linux, from service/):
 #   cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 #   ./build/sv_publisher_service [port]
 #
-# Prerequisites mirror the Tauri build — see ../WINDOWS_BUILD.md:
-#   * libuv      (Windows event loop for uSockets) via vcpkg x64-windows-static-md
-#   * Npcap SDK  (GooseReceiver links the pcap API) extracted to C:\npcap-sdk
+# Prerequisites (Windows) — see ../WINDOWS_BUILD.md:
+#   * libuv      (event loop for uSockets):
+#                  MinGW → MSYS2  pacman -S mingw-w64-x86_64-libuv
+#                  MSVC  → vcpkg  install libuv:x64-windows-static-md
+#   * Npcap SDK  (GooseReceiver needs <pcap/pcap.h>) extracted to C:\npcap-sdk.
+#                  wpcap.dll itself is loaded dynamically — no import lib linked.
 #   * Npcap runtime + (raw send) the usual driver-access rules.
 
 cmake_minimum_required(VERSION 3.16)
@@ -90,76 +97,99 @@ target_include_directories(sv_publisher_service PRIVATE
 
 if(WIN32)
     # ═════════════════════════════════════════════════════════════════════════
-    # Windows: libuv eventing for uSockets, Npcap SDK for the GOOSE RX pcap
-    # calls, Winsock + libuv system deps. Mirrors src-tauri/build.rs.
+    # Windows: libuv eventing for uSockets, Npcap SDK *headers* for the GOOSE RX
+    # pcap structs, Winsock + libuv system deps. wpcap.dll is loaded dynamically
+    # at runtime (GooseReceiver/PcapTx) — NO wpcap import library at link time.
+    # Two toolchains supported: MSVC (vcpkg libuv) and MinGW/g++ (MSYS2 libuv).
     # ═════════════════════════════════════════════════════════════════════════
 
-    # libuv discovery: LIBUV_DIR, else VCPKG_ROOT\installed\<triplet>, else C:\vcpkg.
-    if(DEFINED ENV{LIBUV_DIR})
-        set(LIBUV_ROOT $ENV{LIBUV_DIR})
-    else()
-        if(DEFINED ENV{VCPKG_ROOT})
-            set(_vcpkg $ENV{VCPKG_ROOT})
-        else()
-            set(_vcpkg "C:/vcpkg")
-        endif()
-        if(DEFINED ENV{LIBUV_TRIPLET})
-            set(_triplet $ENV{LIBUV_TRIPLET})
-        else()
-            set(_triplet "x64-windows-static-md")
-        endif()
-        set(LIBUV_ROOT "${_vcpkg}/installed/${_triplet}")
-    endif()
-    if(NOT EXISTS "${LIBUV_ROOT}/include/uv.h")
-        message(FATAL_ERROR "libuv not found at ${LIBUV_ROOT}. Install: vcpkg install libuv:x64-windows-static-md  (see ../WINDOWS_BUILD.md). Override with LIBUV_DIR/VCPKG_ROOT/LIBUV_TRIPLET.")
-    endif()
-    # Link name follows the file vcpkg emitted (recent: libuv.lib, older/shared: uv.lib).
-    if(EXISTS "${LIBUV_ROOT}/lib/libuv.lib")
-        set(LIBUV_LIB "${LIBUV_ROOT}/lib/libuv.lib")
-    elseif(EXISTS "${LIBUV_ROOT}/lib/uv.lib")
-        set(LIBUV_LIB "${LIBUV_ROOT}/lib/uv.lib")
-    else()
-        message(FATAL_ERROR "libuv import lib not found under ${LIBUV_ROOT}/lib (expected libuv.lib or uv.lib).")
-    endif()
-
-    # Npcap SDK discovery: NPCAP_SDK_DIR, else C:\npcap-sdk.
+    # ── Npcap SDK headers (both toolchains): NPCAP_SDK_DIR, else C:\npcap-sdk ──
     if(DEFINED ENV{NPCAP_SDK_DIR})
         set(NPCAP_SDK $ENV{NPCAP_SDK_DIR})
     else()
         set(NPCAP_SDK "C:/npcap-sdk")
     endif()
     if(NOT EXISTS "${NPCAP_SDK}/Include/pcap/pcap.h")
-        message(FATAL_ERROR "Npcap SDK not found at ${NPCAP_SDK}. Download the SDK zip from https://npcap.com/#download and extract to C:\\npcap-sdk (or set NPCAP_SDK_DIR).")
+        message(FATAL_ERROR "Npcap SDK headers not found at ${NPCAP_SDK}. Download the SDK zip from https://npcap.com/#download and extract to C:\\npcap-sdk (or set NPCAP_SDK_DIR). Only the headers are needed — wpcap.dll is loaded dynamically.")
     endif()
 
     set(WIN_DEFS
         LIBUS_NO_SSL LIBUS_USE_LIBUV
         WIN32 _WINDOWS WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0601
         NOMINMAX _CRT_SECURE_NO_WARNINGS _WINSOCK_DEPRECATED_NO_WARNINGS)
+    # libuv's own Windows system dependencies + Winsock/adapter enum used by the
+    # engine (PcapTx/PubWsServer). Same set for both toolchains.
+    set(WIN_SYS_LIBS ws2_32 iphlpapi psapi userenv user32 advapi32 dbghelp winmm)
+
+    if(MSVC)
+        # ── MSVC: libuv from vcpkg (x64-windows-static-md import lib) ─────────
+        if(DEFINED ENV{LIBUV_DIR})
+            set(LIBUV_ROOT $ENV{LIBUV_DIR})
+        else()
+            if(DEFINED ENV{VCPKG_ROOT})
+                set(_vcpkg $ENV{VCPKG_ROOT})
+            else()
+                set(_vcpkg "C:/vcpkg")
+            endif()
+            if(DEFINED ENV{LIBUV_TRIPLET})
+                set(_triplet $ENV{LIBUV_TRIPLET})
+            else()
+                set(_triplet "x64-windows-static-md")
+            endif()
+            set(LIBUV_ROOT "${_vcpkg}/installed/${_triplet}")
+        endif()
+        if(NOT EXISTS "${LIBUV_ROOT}/include/uv.h")
+            message(FATAL_ERROR "libuv not found at ${LIBUV_ROOT}. Install: vcpkg install libuv:x64-windows-static-md  (see ../WINDOWS_BUILD.md). Override with LIBUV_DIR/VCPKG_ROOT/LIBUV_TRIPLET.")
+        endif()
+        if(EXISTS "${LIBUV_ROOT}/lib/libuv.lib")
+            set(LIBUV_LIB "${LIBUV_ROOT}/lib/libuv.lib")
+        elseif(EXISTS "${LIBUV_ROOT}/lib/uv.lib")
+            set(LIBUV_LIB "${LIBUV_ROOT}/lib/uv.lib")
+        else()
+            message(FATAL_ERROR "libuv import lib not found under ${LIBUV_ROOT}/lib (expected libuv.lib or uv.lib).")
+        endif()
+        set(LIBUV_INCLUDE "${LIBUV_ROOT}/include")
+        set(WIN_OPTS /EHsc /MD /O2)
+    else()
+        # ── MinGW/g++: libuv from MSYS2 (pacman -S mingw-w64-x86_64-libuv) ────
+        # Honour LIBUV_DIR / LIBUV_ROOT if set, else let CMake find the MSYS2
+        # mingw prefix copy (uv.h + libuv.dll.a / libuv.a).
+        if(DEFINED ENV{LIBUV_DIR})
+            set(_uv_hint $ENV{LIBUV_DIR})
+        elseif(DEFINED ENV{LIBUV_ROOT})
+            set(_uv_hint $ENV{LIBUV_ROOT})
+        endif()
+        find_path(LIBUV_INCLUDE uv.h HINTS ${_uv_hint} PATH_SUFFIXES include)
+        find_library(LIBUV_LIB NAMES uv libuv HINTS ${_uv_hint} PATH_SUFFIXES lib)
+        if(NOT LIBUV_INCLUDE OR NOT LIBUV_LIB)
+            message(FATAL_ERROR "libuv not found for MinGW. Install via MSYS2: pacman -S mingw-w64-x86_64-libuv  (or set LIBUV_DIR to a root containing include/uv.h and lib/libuv*.a).")
+        endif()
+        # GCC flags; exceptions are on by default. Static-link libstdc++/libgcc
+        # so the .exe runs without shipping the MinGW runtime DLLs.
+        set(WIN_OPTS -O2)
+    endif()
 
     target_compile_definitions(usockets PRIVATE
         LIBUS_NO_SSL LIBUS_USE_LIBUV WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0601 _CRT_SECURE_NO_WARNINGS)
-    target_include_directories(usockets PRIVATE ${LIBUV_ROOT}/include)
+    target_include_directories(usockets PRIVATE ${LIBUV_INCLUDE})
     target_sources(usockets PRIVATE ${USOCKETS}/src/eventing/libuv.c)
 
     target_compile_definitions(sv_engine PRIVATE ${WIN_DEFS} UWS_NO_ZLIB)
-    target_include_directories(sv_engine PRIVATE ${LIBUV_ROOT}/include ${NPCAP_SDK}/Include)
-    target_compile_options(sv_engine PRIVATE /EHsc /MD /O2)
+    target_include_directories(sv_engine PRIVATE ${LIBUV_INCLUDE} ${NPCAP_SDK}/Include)
+    target_compile_options(sv_engine PRIVATE ${WIN_OPTS})
 
     target_compile_definitions(sv_publisher_service PRIVATE ${WIN_DEFS} UWS_NO_ZLIB)
-    target_include_directories(sv_publisher_service PRIVATE ${LIBUV_ROOT}/include)
-    target_compile_options(sv_publisher_service PRIVATE /EHsc /MD /O2)
+    target_include_directories(sv_publisher_service PRIVATE ${LIBUV_INCLUDE})
+    target_compile_options(sv_publisher_service PRIVATE ${WIN_OPTS})
 
-    # wpcap is delay-loaded: GooseReceiver links it, but Npcap installs wpcap.dll
-    # under System32\Npcap (off the default search path). A delay-load hook in
-    # PcapTx.cc loads it from there on first use, so the EXE still launches.
     target_link_libraries(sv_publisher_service PRIVATE
-        sv_engine usockets
-        ${LIBUV_LIB}
-        ${NPCAP_SDK}/Lib/x64/wpcap.lib
-        delayimp
-        ws2_32 iphlpapi psapi userenv user32 advapi32 dbghelp)
-    target_link_options(sv_publisher_service PRIVATE /DELAYLOAD:wpcap.dll)
+        sv_engine usockets ${LIBUV_LIB} ${WIN_SYS_LIBS})
+
+    if(NOT MSVC)
+        # Self-contained .exe: no libstdc++-6.dll / libgcc_s / libwinpthread to ship.
+        target_link_options(sv_publisher_service PRIVATE
+            -static-libstdc++ -static-libgcc -static)
+    endif()
 
 else()
     # ═════════════════════════════════════════════════════════════════════════

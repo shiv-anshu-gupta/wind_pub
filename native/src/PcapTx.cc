@@ -39,22 +39,30 @@
 #include <windows.h>
 #include <winsock2.h>
 #include <iphlpapi.h>
+
+/* MSVC-only link directives. MinGW/g++ ignores #pragma comment(lib) — those
+ * libraries are linked by the build system instead (CMake/build.rs). delayimp
+ * is an MSVC construct; MinGW has no equivalent, so the wpcap delay-load hook
+ * below is compiled only for MSVC. Neither PcapTx nor GooseReceiver links
+ * wpcap at load time anymore (both resolve it via LoadLibrary/GetProcAddress),
+ * so the hook is now purely a belt-and-suspenders aid for MSVC builds that
+ * still pass /DELAYLOAD:wpcap.dll. */
+#ifdef _MSC_VER
 #include <delayimp.h>
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
 
 /*============================================================================
- * Delay-load hook for wpcap.dll
+ * Delay-load hook for wpcap.dll (MSVC only)
  *
- * GooseReceiver.cc links wpcap.lib directly (it calls the pcap API), which
- * would otherwise make wpcap.dll a *load-time* dependency — and the EXE would
- * fail to even start (STATUS_DLL_NOT_FOUND, 0xC0000135). Npcap installs
- * wpcap.dll under %SystemRoot%\System32\Npcap, a directory that is NOT on the
- * default DLL search path. We therefore delay-load wpcap.dll
- * (/DELAYLOAD:wpcap.dll in build.rs); on the first pcap call this hook loads it
- * from the real Npcap location, mirroring load_npcap_dll() below. If the
- * explicit path misses, returning null lets the loader fall back to the default
- * search (so a WinPcap-style global install still resolves).
+ * If an MSVC build links wpcap.lib directly, wpcap.dll would otherwise become a
+ * *load-time* dependency — and the EXE would fail to even start
+ * (STATUS_DLL_NOT_FOUND, 0xC0000135), because Npcap installs wpcap.dll under
+ * %SystemRoot%\System32\Npcap, a directory that is NOT on the default DLL
+ * search path. With /DELAYLOAD:wpcap.dll this hook loads it from the real Npcap
+ * location on first use, mirroring load_npcap_dll() below. Returning null lets
+ * the loader fall back to the default search (so a WinPcap-style global install
+ * still resolves).
  *============================================================================*/
 static FARPROC WINAPI wpcap_delay_hook(unsigned dliNotify, PDelayLoadInfo pdli) {
     if (dliNotify == dliNotePreLoadLibrary && pdli && pdli->szDll &&
@@ -73,6 +81,7 @@ static FARPROC WINAPI wpcap_delay_hook(unsigned dliNotify, PDelayLoadInfo pdli) 
 
 /* delayimp.h declares this weak hook pointer; defining it installs our hook. */
 const PfnDliHook __pfnDliNotifyHook2 = wpcap_delay_hook;
+#endif  /* _MSC_VER */
 
 /*============================================================================
  * Minimal pcap type/ABI declarations (so we need no Npcap SDK headers)

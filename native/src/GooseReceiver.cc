@@ -9,10 +9,124 @@
 #include "../include/GooseReceiver.h"
 #include "../include/SpscBridge.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <windows.h>
+#endif
+
 #include <pcap/pcap.h>
 
 #include <cstdio>
 #include <cstring>
+
+/*============================================================================
+ * Dynamic wpcap.dll loading (Windows)
+ *
+ * Npcap installs wpcap.dll under %SystemRoot%\System32\Npcap, which is NOT on
+ * the default DLL search path. To keep the binary launchable when Npcap is
+ * absent — and, crucially, to need NO wpcap import library at link time (so the
+ * build is identical under MSVC and MinGW/g++) — we resolve the pcap entry
+ * points we use at runtime via LoadLibrary/GetProcAddress, then #define the
+ * pcap_* names onto the resolved pointers so the capture code below is
+ * unchanged. PcapTx.cc loads wpcap the same way for TX. On Linux/macOS the pcap
+ * functions are linked normally (-lpcap) and none of this applies.
+ *============================================================================*/
+#ifdef _WIN32
+namespace {
+
+typedef pcap_t* (*pcap_create_t)(const char*, char*);
+typedef int     (*pcap_set_snaplen_t)(pcap_t*, int);
+typedef int     (*pcap_set_promisc_t)(pcap_t*, int);
+typedef int     (*pcap_set_timeout_t)(pcap_t*, int);
+typedef int     (*pcap_set_buffer_size_t)(pcap_t*, int);
+typedef int     (*pcap_activate_t)(pcap_t*);
+typedef int     (*pcap_compile_t)(pcap_t*, struct bpf_program*, const char*, int, bpf_u_int32);
+typedef int     (*pcap_setfilter_t)(pcap_t*, struct bpf_program*);
+typedef void    (*pcap_freecode_t)(struct bpf_program*);
+typedef void    (*pcap_close_t)(pcap_t*);
+typedef char*   (*pcap_geterr_t)(pcap_t*);
+typedef void    (*pcap_breakloop_t)(pcap_t*);
+typedef int     (*pcap_next_ex_t)(pcap_t*, struct pcap_pkthdr**, const u_char**);
+
+pcap_create_t        g_pcap_create        = nullptr;
+pcap_set_snaplen_t   g_pcap_set_snaplen   = nullptr;
+pcap_set_promisc_t   g_pcap_set_promisc   = nullptr;
+pcap_set_timeout_t   g_pcap_set_timeout   = nullptr;
+pcap_set_buffer_size_t g_pcap_set_buffer_size = nullptr;
+pcap_activate_t      g_pcap_activate      = nullptr;
+pcap_compile_t       g_pcap_compile       = nullptr;
+pcap_setfilter_t     g_pcap_setfilter     = nullptr;
+pcap_freecode_t      g_pcap_freecode      = nullptr;
+pcap_close_t         g_pcap_close         = nullptr;
+pcap_geterr_t        g_pcap_geterr        = nullptr;
+pcap_breakloop_t     g_pcap_breakloop     = nullptr;
+pcap_next_ex_t       g_pcap_next_ex       = nullptr;
+
+bool load_wpcap()
+{
+    if (g_pcap_create) return true;   /* already resolved */
+
+    HMODULE dll = nullptr;
+    char path[MAX_PATH];
+    /* Prefer the real Npcap location; ALTERED_SEARCH_PATH lets wpcap.dll's own
+     * Packet.dll dependency resolve from System32\Npcap too. */
+    if (GetSystemDirectoryA(path, MAX_PATH)) {
+        strncat(path, "\\Npcap\\wpcap.dll", sizeof(path) - strlen(path) - 1);
+        dll = LoadLibraryExA(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    }
+    if (!dll) dll = LoadLibraryA("wpcap.dll");   /* WinPcap-style global install */
+    if (!dll) {
+        std::fprintf(stderr, "[goose-rx] Npcap not found. Install the Npcap "
+                             "runtime from https://npcap.com/#download\n");
+        return false;
+    }
+
+    #define RESOLVE(sym) g_##sym = reinterpret_cast<sym##_t>(GetProcAddress(dll, #sym))
+    RESOLVE(pcap_create);
+    RESOLVE(pcap_set_snaplen);
+    RESOLVE(pcap_set_promisc);
+    RESOLVE(pcap_set_timeout);
+    RESOLVE(pcap_set_buffer_size);
+    RESOLVE(pcap_activate);
+    RESOLVE(pcap_compile);
+    RESOLVE(pcap_setfilter);
+    RESOLVE(pcap_freecode);
+    RESOLVE(pcap_close);
+    RESOLVE(pcap_geterr);
+    RESOLVE(pcap_breakloop);
+    RESOLVE(pcap_next_ex);
+    #undef RESOLVE
+
+    if (!g_pcap_create || !g_pcap_set_snaplen || !g_pcap_set_promisc ||
+        !g_pcap_set_timeout || !g_pcap_set_buffer_size || !g_pcap_activate ||
+        !g_pcap_compile || !g_pcap_setfilter || !g_pcap_freecode ||
+        !g_pcap_close || !g_pcap_geterr || !g_pcap_breakloop || !g_pcap_next_ex) {
+        std::fprintf(stderr, "[goose-rx] wpcap.dll is missing expected exports\n");
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+/* Route the capture code's pcap_* calls through the dynamically-loaded
+ * pointers. These macros must follow <pcap/pcap.h> (which declares the real
+ * prototypes) and the loader above (which stringizes the names). */
+#define pcap_create          g_pcap_create
+#define pcap_set_snaplen     g_pcap_set_snaplen
+#define pcap_set_promisc     g_pcap_set_promisc
+#define pcap_set_timeout     g_pcap_set_timeout
+#define pcap_set_buffer_size g_pcap_set_buffer_size
+#define pcap_activate        g_pcap_activate
+#define pcap_compile         g_pcap_compile
+#define pcap_setfilter       g_pcap_setfilter
+#define pcap_freecode        g_pcap_freecode
+#define pcap_close           g_pcap_close
+#define pcap_geterr          g_pcap_geterr
+#define pcap_breakloop       g_pcap_breakloop
+#define pcap_next_ex         g_pcap_next_ex
+#endif  // _WIN32
 
 namespace {
 
@@ -142,6 +256,11 @@ void GooseReceiver::clearStreams()
 bool GooseReceiver::start(const std::string& iface)
 {
     if (m_running.load(std::memory_order_acquire)) return false;
+
+#ifdef _WIN32
+    /* Resolve wpcap.dll exports before first use (no link-time pcap dep). */
+    if (!load_wpcap()) return false;
+#endif
 
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t* handle = pcap_create(iface.c_str(), errbuf);

@@ -12,7 +12,9 @@
 #include <math.h>
 #include <ctype.h>
 
-#ifdef _WIN32
+/* MSVC names these strtok_s / _strdup; MinGW-w64 provides the POSIX strtok_r /
+ * strdup natively, so only remap under MSVC. */
+#if defined(_WIN32) && defined(_MSC_VER)
 #define strtok_r strtok_s
 #define strdup _strdup
 #endif
