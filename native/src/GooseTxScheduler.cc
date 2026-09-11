@@ -86,6 +86,23 @@ void GooseTxScheduler::loop()
         }
     };
 
+    /* Wait up to `ms`, but return at once if a NEW value arrives (or stop()).
+     * Sleeping the whole interval delayed a state change by up to one
+     * heartbeat (measured 39-665 ms with a 1000 ms heartbeat); a trip or
+     * cross-trigger GOOSE must go out within a few ms. sampleAt() returns the
+     * latched value repeatedly, so peeking here does not lose the change: the
+     * top of the loop reads the same value and fires. */
+    auto waitOrChange = [&](uint32_t ms) {
+        const auto deadline = steady_clock::now() + milliseconds(ms);
+        while (m_running.load(std::memory_order_relaxed) && steady_clock::now() < deadline) {
+            SpscMessage peek;
+            if (bridge.sampleAt(m_settings.streamId, now_ns_realtime(), 0, &peek) &&
+                (!hasCached || (peek.value.boolean != 0) != cachedBool))
+                return;
+            std::this_thread::sleep_for(milliseconds(1));
+        }
+    };
+
     while (m_running.load(std::memory_order_relaxed)) {
         uint64_t now = now_ns_realtime();
 
@@ -102,7 +119,7 @@ void GooseTxScheduler::loop()
                 m_stNum.store(stNum, std::memory_order_relaxed);
                 nextInterval_ms = m_settings.firstRetx_ms;
                 fire();
-                std::this_thread::sleep_for(milliseconds(nextInterval_ms));
+                waitOrChange(nextInterval_ms);
                 continue;
             }
             if (newBool != cachedBool) {
@@ -113,7 +130,7 @@ void GooseTxScheduler::loop()
                 m_stNum.store(stNum, std::memory_order_relaxed);
                 nextInterval_ms = m_settings.firstRetx_ms;
                 fire();
-                std::this_thread::sleep_for(milliseconds(nextInterval_ms));
+                waitOrChange(nextInterval_ms);
                 continue;
             }
         }
@@ -121,7 +138,7 @@ void GooseTxScheduler::loop()
         /* No state change — emit retransmit / heartbeat at current cadence. */
         if (!hasCached) {
             /* No initial value yet — idle. Park briefly and re-check. */
-            std::this_thread::sleep_for(milliseconds(m_settings.heartbeat_ms));
+            waitOrChange(m_settings.heartbeat_ms);
             continue;
         }
 
@@ -135,6 +152,6 @@ void GooseTxScheduler::loop()
             nextInterval_ms = (uint32_t)doubled;
         }
 
-        std::this_thread::sleep_for(milliseconds(nextInterval_ms));
+        waitOrChange(nextInterval_ms);
     }
 }
