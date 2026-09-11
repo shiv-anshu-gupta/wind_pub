@@ -125,6 +125,10 @@ int stopAllTx()                   { return sv_goose_stop_all_tx(); }
 int rxStart(const char* iface)    { return sv_goose_rx_start(iface); }
 int rxStop()                      { return sv_goose_rx_stop(); }
 int rxRegister(const char* gocbRef, uint16_t streamId) {
+    /* A receive-only stream is never configured with configureTx(), so it was
+     * never registered: SpscBridge::pushOutbound() then drops every decoded
+     * frame (rxSeen counts up, rxPushed stays 0, popDecoded never returns). */
+    SpscBridge::instance().registerStream(streamId);
     return sv_goose_rx_register(gocbRef, streamId);
 }
 int rxClear()                     { return sv_goose_rx_clear(); }
